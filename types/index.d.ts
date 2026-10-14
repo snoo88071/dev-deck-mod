@@ -9,10 +9,32 @@ export type LiveSession = {
   startedAt: number
 }
 
+/** A past CLI session, from its transcript: what a History row shows and what the search reads. */
+export type PastSession = {
+  sessionId: string
+  cwd: string
+  branch: string
+  /** The title Claude Code wrote, or the first prompt. */
+  title: string
+  /** The prompts typed, cut short: the first and the last ones when there are many. */
+  prompts: string[]
+  startedAt: number
+  /** The transcript's last write. */
+  lastAt: number
+}
+
+/** The pane's tabs. */
+export type DeckTab = 'open' | 'history'
+
 declare module 'claude-code' {
   interface PluginState {
     'dev-deck-mod': {
       sessions: LiveSession[]
+      tab: DeckTab
+      history: PastSession[]
+      query: string
+      /** True while the history is being read for the first time. */
+      isScanning: boolean
     }
   }
 }

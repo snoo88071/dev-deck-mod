@@ -17,6 +17,21 @@ export function shortPath(path: string, home: string): string {
   return norm(path).startsWith(h + '\\') || norm(path) === h ? '~' + path.slice(h.length) : path
 }
 
+/** `text` on one line in exactly `width` cells: cut at the end with `…`, or padded. */
+export function fit(text: string, width: number): string {
+  const one = text.replace(/\s+/g, ' ').trim()
+  const chars = [...one]
+  if (chars.length <= width) return one + ' '.repeat(width - chars.length)
+  return chars.slice(0, Math.max(0, width - 1)).join('') + '…'
+}
+
+/** `text` in exactly `width` cells, cut at the start: the end of a path is the part that tells. */
+export function fitStart(text: string, width: number): string {
+  const chars = [...text]
+  if (chars.length <= width) return text + ' '.repeat(width - chars.length)
+  return '…' + chars.slice(chars.length - Math.max(0, width - 1)).join('')
+}
+
 /** The word for a session's state. */
 export function statusLabel(status: string): string {
   if (status === 'busy') return 'al lavoro'
