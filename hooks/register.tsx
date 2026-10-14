@@ -4,6 +4,7 @@ import type { EngineInterface, Register, RenderNode, Timer } from 'claude-code'
 import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
 import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, search } from './engine/history'
 import { bytes, contextPercent, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
+import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
 import { parseSession, sortSessions } from './engine/sessions'
 import type { LiveSession, PastSession, SessionLoad } from '../types'
 
@@ -285,6 +286,23 @@ async function stopBranch($: EngineInterface, pid: number): Promise<void> {
   await refresh($)
 }
 
+/** Every process and the ports they listen on, for the guard: no transcripts read. */
+async function readTree($: EngineInterface) {
+  try {
+    const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', loadScript([])], { timeoutMs: 20_000 })
+    const procs = parseProcs(JSON.stringify(JSON.parse(r.stdout).procs ?? []))
+    if (procs.length === 0) return undefined
+    const net = await $.process.run(['netstat', '-ano', '-p', 'TCP'], { timeoutMs: 10_000 })
+    return { tree: treeOf(procs), ports: parseNetstat(net.stdout) }
+  } catch {
+    return undefined
+  }
+}
+
+const REUSE = 'Riusa quello'
+const RESTART = 'Riavvia'
+const LAUNCH = 'Lancia lo stesso'
+
 /** Stop takes two presses: the first arms the button for a few seconds, the second closes. */
 async function pressStop($: EngineInterface, pid: number): Promise<void> {
   if ((await read($, armed)) !== pid) {
@@ -319,6 +337,46 @@ export const register: Register = on => {
     if ((await read($, tab)) === 'history') void rescan($)
     return {}
   })
+
+  // A second dev server for the same project, or on a port already taken: ask first.
+  on('tool.call', async ($, e, next) => {
+    const tool = String(e.tool)
+    if (tool !== 'Bash' && tool !== 'PowerShell') return next(e)
+    const command = (e as { command?: unknown }).command
+    if (typeof command !== 'string') return next(e)
+    const start = serverStart(command)
+    if (!start) return next(e)
+    const snap = await readTree($)
+    if (!snap) return next(e)
+    const live = await readSessions($, await configDir($))
+    const found = runningServer(start, commandFolder(command, await $.session.cwd()), snap.tree, snap.ports, live)
+    if (!found) return next(e)
+
+    const where = found.ports.map(p => ':' + p).join(' ')
+    const question =
+      found.why === 'port'
+        ? `La porta ${start.port} è già presa da ${found.label} (${where}). Cosa faccio?`
+        : `Per questo progetto è già acceso ${found.label} (${where}). Cosa faccio?`
+    let choice: string
+    try {
+      choice = await $.ui.ask(question, { header: 'Server', options: [REUSE, RESTART, LAUNCH] })
+    } catch {
+      // Nobody to ask (claude -p), or the question was closed: the command goes on as asked.
+      return next(e)
+    }
+    if (choice === REUSE) return { deny: reuseNote(found) }
+    if (choice === RESTART) {
+      try {
+        await $.process.run(['taskkill', '/PID', String(found.pid), '/T', '/F'], { timeoutMs: 15_000 })
+      } catch {
+        // Gone already: the command starts all the same.
+      }
+      return next(e)
+    }
+    if (choice === LAUNCH) return next(e)
+    // Typed under "Other": it's for Claude.
+    return { deny: `A dev server is already running (${found.label}, ${where}). Before starting another, the person said: ${choice}` }
+  }).catch(($, e, next) => next(e))
 
   // Never keeps a pane open: whatever happens here, the close goes on.
   on('ui.close', async ($, e, next) => {
