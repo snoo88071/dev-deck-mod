@@ -1,0 +1,8 @@
+{
+  "name": "dev-deck-mod",
+  "version": "0.1.0",
+  "description": "Your Claude Code CLI sessions in a pane: what's open, what's running under it, and the past ones to resume.",
+  "author": { "name": "Sergio Galici" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
