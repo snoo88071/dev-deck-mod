@@ -35,6 +35,7 @@ export function fitStart(text: string, width: number): string {
 /** The word for a session's state. */
 export function statusLabel(status: string): string {
   if (status === 'busy') return 'al lavoro'
+  if (status === 'done') return 'finito'
   if (status === 'idle') return 'ferma'
   return status || '?'
 }

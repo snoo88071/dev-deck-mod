@@ -36,7 +36,7 @@ describe('a command that starts a dev server', () => {
 })
 
 describe('a server already running', () => {
-  const live: LiveSession[] = [{ pid: 50, sessionId: 's', name: 'shop', cwd: SHOP, status: 'busy', startedAt: 0 }]
+  const live: LiveSession[] = [{ pid: 50, sessionId: 's', name: 'shop', cwd: SHOP, status: 'busy', statusSince: 0, startedAt: 0 }]
   const procs = [
     p(1, 0, 'explorer.exe', 'C:\\WINDOWS\\Explorer.EXE'),
     p(2, 1, 'WindowsTerminal.exe', 'wt'),

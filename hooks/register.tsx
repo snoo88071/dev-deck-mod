@@ -5,7 +5,7 @@ import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
 import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, search } from './engine/history'
 import { bytes, contextPercent, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
-import { parseSession, sortSessions } from './engine/sessions'
+import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
 import type { LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
@@ -39,6 +39,12 @@ let ticker: Timer | undefined
 let alive: Set<number> | undefined
 let procsAt = 0
 let scanning: Promise<void> | undefined
+/** Each open session's status at the last read: a change from busy to idle is «finished». */
+let lastStatus = new Map<string, string>()
+/** Titles read from the transcripts, with the status they were read at: a new answer may retitle. */
+const titles = new Map<string, { title: string | undefined; status: string; at: number }>()
+/** A title is read again this often even when nothing changed. */
+const TITLE_MS = 60_000
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
 
@@ -148,10 +154,38 @@ async function refresh($: EngineInterface): Promise<void> {
     const read = await readLoads($, found)
     if (read) await update($, loads, () => read)
   }
-  const open = alive ? found.filter(s => alive!.has(s.pid) || s.sessionId === me) : found
+  const alivenow = alive ? found.filter(s => alive!.has(s.pid) || s.sessionId === me) : found
+  const open = await withTitles($, alivenow, now)
+  for (const s of justFinished(lastStatus, open)) {
+    if (s.sessionId !== me) $.ui.toast((s.title ?? s.name) + ' ha finito')
+  }
+  lastStatus = new Map(open.map(s => [s.sessionId, s.status]))
   await update($, sessions, () => open)
   // The ages move even when the list doesn't.
   $.ui.invalidate('ui.render')
+}
+
+/** The sessions with the title Claude Code wrote, read again when one stops or a minute went by. */
+async function withTitles($: EngineInterface, list: LiveSession[], now: number): Promise<LiveSession[]> {
+  const root = (await configDir($)) + '\\projects\\'
+  const out: LiveSession[] = []
+  for (const s of list) {
+    let known = titles.get(s.sessionId)
+    if (!known || known.status !== s.status || now - known.at >= TITLE_MS) {
+      let title = known?.title
+      try {
+        const path = root + projectFolder(s.cwd) + '\\' + s.sessionId + '.jsonl'
+        const r = await $.process.run(['findstr', '/c:"aiTitle"', path], { timeoutMs: 10_000 })
+        title = lastTitle(r.stdout) ?? title
+      } catch {
+        // No transcript yet: the name stands in.
+      }
+      known = { title, status: s.status, at: now }
+      titles.set(s.sessionId, known)
+    }
+    out.push(known.title ? { ...s, title: known.title } : s)
+  }
+  return out
 }
 
 /** Starts the refresh while the pane is open; resolves once the first read is in. */
@@ -165,6 +199,8 @@ async function start($: EngineInterface): Promise<void> {
 function stop(): void {
   ticker?.cancel()
   ticker = undefined
+  // What happened while the pane was closed isn't news when it opens again.
+  lastStatus = new Map()
 }
 
 /** Every top-level transcript under `<config>/projects`, with its size and last write. */
@@ -422,7 +458,8 @@ export const register: Register = on => {
       const ageW = 8
       const ctxW = 8
       const ramW = 8
-      const nameW = Math.min(22, Math.max(10, Math.floor(width * 0.22)))
+      // The title says what a session is about: it gets the room, the folder what's left.
+      const nameW = Math.min(40, Math.max(12, Math.floor(width * 0.32)))
       const folderW = Math.max(8, width - markW - nameW - stateW - ageW - ctxW - ramW - 6)
       const stopW = 11
       const portsW = 14
@@ -432,23 +469,27 @@ export const register: Register = on => {
           {tabs}
           {live.length === 0 && <Text dimColor>Nessuna sessione CLI aperta</Text>}
           {live.map(s => {
-            const isBusy = s.status === 'busy'
+            const state = shownState(s, now)
+            const isBusy = state === 'busy'
+            const isDone = state === 'done'
             const isMe = s.sessionId === me
             const load = held[s.sessionId]
             return (
               <Box key={s.sessionId} flexDirection="column">
                 <Box flexDirection="row" columnGap={1}>
                   <Box width={markW}>
-                    <Text color={isBusy ? 'success' : undefined} dimColor={!isBusy}>{isBusy ? '●' : '○'}</Text>
+                    <Text color={isBusy || isDone ? 'success' : undefined} dimColor={!isBusy && !isDone}>
+                      {isBusy ? '●' : isDone ? '✓' : '○'}
+                    </Text>
                   </Box>
                   <Box width={nameW}>
-                    <Text bold={isMe} wrap="truncate-end">{s.name}</Text>
+                    <Text bold={isMe} wrap="truncate-end">{s.title ?? s.name}</Text>
                   </Box>
                   <Box width={folderW}>
                     <Text dimColor wrap="truncate-start">{shortPath(s.cwd, home)}</Text>
                   </Box>
                   <Box width={stateW}>
-                    <Text dimColor={!isBusy}>{statusLabel(s.status)}</Text>
+                    <Text bold={isDone} dimColor={!isBusy && !isDone}>{statusLabel(state)}</Text>
                   </Box>
                   <Box width={ageW}>
                     <Text dimColor>{since(s.startedAt, now)}</Text>

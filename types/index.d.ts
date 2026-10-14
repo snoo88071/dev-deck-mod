@@ -6,7 +6,11 @@ export type LiveSession = {
   cwd: string
   /** `busy` while Claude works, `idle` while it waits for you; whatever else the file says, as it says it. */
   status: string
+  /** When the status last changed, as the file says; 0 when it doesn't. */
+  statusSince: number
   startedAt: number
+  /** The title Claude Code wrote in the transcript, once there is one. */
+  title?: string
 }
 
 /** Something an open session started directly, with everything under it. */
