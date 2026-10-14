@@ -9,6 +9,26 @@ export type LiveSession = {
   startedAt: number
 }
 
+/** Something an open session started directly, with everything under it. */
+export type Branch = {
+  /** The process the session started: Stop closes it and its tree. */
+  pid: number
+  label: string
+  /** TCP ports anything in the branch listens on. */
+  ports: number[]
+  /** Bytes in memory, the whole branch. */
+  ram: number
+}
+
+/** What an open session holds, from the last read of the processes. */
+export type SessionLoad = {
+  /** Bytes in memory: claude itself and everything under it. */
+  ram: number
+  branches: Branch[]
+  /** Percent of the context window, when the transcript says. */
+  context?: number
+}
+
 /** A past CLI session, from its transcript: what a History row shows and what the search reads. */
 export type PastSession = {
   sessionId: string
@@ -30,6 +50,10 @@ declare module 'claude-code' {
   interface PluginState {
     'dev-deck-mod': {
       sessions: LiveSession[]
+      /** By session id. */
+      loads: Record<string, SessionLoad>
+      /** The branch whose Stop was pressed once, waiting for the second press. */
+      armed: number
       tab: DeckTab
       history: PastSession[]
       query: string

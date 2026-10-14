@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { shortPath, since, statusLabel } from '../hooks/engine/format'
-import { parseSession, parseTasklist } from '../hooks/engine/sessions'
+import { parseSession } from '../hooks/engine/sessions'
 
 const HOME = 'C:\\Users\\me'
 const NOW = 1_800_000_000_000
@@ -28,12 +28,6 @@ describe('reading a session file', () => {
 
   test('names a session with no name by its id', () => {
     expect(parseSession(cli(4, { name: undefined, sessionId: 'abcdef1234' }))?.name).toBe('abcdef12')
-  })
-
-  test('reads the pids from tasklist', () => {
-    const csv = '"claude.exe","17920","Console","1","229.648 K"\r\n"claude.exe","8880","Console","1","161.112 K"\r\n'
-    expect([...parseTasklist(csv)]).toEqual([17920, 8880])
-    expect(parseTasklist('INFO: No tasks are running which match the specified criteria.').size).toBe(0)
   })
 })
 
@@ -71,15 +65,14 @@ test('/deck shows the open CLI sessions, not the others and not a dead one', asy
     value: Object.keys(files).map(name => ({ name, kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false })),
   }))
   on('fs.read', async ($, e) => ({ value: files[e.path.split(/[\\/]/).pop() ?? ''] ?? '' }))
-  on('process.run', async () => ({
-    value: {
-      exitCode: 0,
-      stdout: '"claude.exe","100","Console","1","1 K"\r\n"claude.exe","200","Console","1","1 K"\r\n"claude.exe","300","Console","1","1 K"\r\n',
-      stderr: '',
-      isStdoutTruncated: false,
-      isStderrTruncated: false,
-    },
-  }))
+  on('process.run', async ($, e) => {
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv[0] === 'powershell') {
+      const procs = [100, 200, 300].map(i => ({ i, p: 1, n: 'claude.exe', w: 200 * 1024 * 1024, c: 'claude' }))
+      return out(JSON.stringify({ procs, tails: {} }))
+    }
+    return out('')
+  })
   on('ui.open', async () => ({ value: { isPlaced: true } }))
   on('ui.panes', async () => ({ value: [] }))
 

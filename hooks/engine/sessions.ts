@@ -3,7 +3,7 @@ import type { LiveSession } from '../../types'
 /**
  * Claude Code keeps one file per open session in `<config>/sessions/<pid>.json`
  * and deletes it when the session exits. A crash leaves it behind, so the pids
- * are checked against the running processes too.
+ * are checked against the running processes too (`register.tsx`, with the process tree).
  */
 
 /** Reads one session file; `undefined` for anything that isn't an open CLI session. */
@@ -26,16 +26,6 @@ export function parseSession(text: string): LiveSession | undefined {
     status: typeof f.status === 'string' ? f.status : '',
     startedAt: typeof f.startedAt === 'number' ? f.startedAt : 0,
   }
-}
-
-/** The pids in `tasklist /FO CSV /NH` output. */
-export function parseTasklist(csv: string): Set<number> {
-  const pids = new Set<number>()
-  for (const line of csv.split(/\r?\n/)) {
-    const pid = Number(/^"[^"]*","(\d+)"/.exec(line)?.[1])
-    if (pid > 0) pids.add(pid)
-  }
-  return pids
 }
 
 /** Open sessions first by the one that started last. */

@@ -3,14 +3,17 @@ import type { EngineInterface, Register, RenderNode, Timer } from 'claude-code'
 
 import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
 import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, search } from './engine/history'
-import { parseSession, parseTasklist, sortSessions } from './engine/sessions'
-import type { LiveSession, PastSession } from '../types'
+import { bytes, contextPercent, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
+import { parseSession, sortSessions } from './engine/sessions'
+import type { LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
 /** The session files are read this often while the pane is open: a read is a few small files. */
 const REFRESH_MS = 2_000
-/** The pids are checked this often: tasklist costs ~300 ms, and only a crash leaves a file behind. */
-const ALIVE_MS = 10_000
+/** The processes are read this often: one PowerShell call and netstat, 1.2-2.2 s measured. */
+const PROCS_MS = 10_000
+/** How long a first press on Stop waits for the second. */
+const ARM_MS = 3_000
 /** Where the history index is kept between sessions. */
 const INDEX_KEY = 'history-index'
 
@@ -19,6 +22,8 @@ const tab = atom({ plugin: 'dev-deck-mod', key: 'tab' } as const, 'open')
 const history = atom({ plugin: 'dev-deck-mod', key: 'history' } as const, [])
 const query = atom({ plugin: 'dev-deck-mod', key: 'query' } as const, '')
 const isScanning = atom({ plugin: 'dev-deck-mod', key: 'isScanning' } as const, false)
+const loads = atom({ plugin: 'dev-deck-mod', key: 'loads' } as const, {})
+const armed = atom({ plugin: 'dev-deck-mod', key: 'armed' } as const, 0)
 
 /**
  * One transcript as the index last saw it: its size, its last write, and what it held,
@@ -31,7 +36,7 @@ let home = ''
 let me = ''
 let ticker: Timer | undefined
 let alive: Set<number> | undefined
-let aliveAt = 0
+let procsAt = 0
 let scanning: Promise<void> | undefined
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
@@ -69,11 +74,65 @@ async function readSessions($: EngineInterface, dir: string): Promise<LiveSessio
   return sortSessions(found)
 }
 
-/** The pids of running `claude.exe` processes; `undefined` when tasklist can't say. */
-async function runningClaudes($: EngineInterface): Promise<Set<number> | undefined> {
+/**
+ * One PowerShell call: every process (pid, parent, name, memory, command line) and, for each open
+ * session, the last answer in its transcript, read from the file's last 256 KB.
+ */
+function loadScript(transcripts: [string, string][]): string {
+  const tails = transcripts
+    .map(([id, path]) => `Tail '${id.replace(/'/g, "''")}' '${path.replace(/'/g, "''")}'`)
+    .join('; ')
+  return [
+    '[Console]::OutputEncoding=[Text.Encoding]::UTF8',
+    '$procs = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,WorkingSetSize,CommandLine | ForEach-Object { [pscustomobject]@{ i=[int]$_.ProcessId; p=[int]$_.ParentProcessId; n=$_.Name; w=[double]$_.WorkingSetSize; c=$_.CommandLine } })',
+    '$tails = @{}',
+    // The file's last 256 KB, shared with Claude Code still writing it; the last answer's line.
+    `function Tail($id, $f) { try { $s=[IO.File]::Open($f,'Open','Read','ReadWrite'); try { $n=[Math]::Min(262144,$s.Length); [void]$s.Seek(-$n,'End'); $b=New-Object byte[] $n; [void]$s.Read($b,0,$n) } finally { $s.Close() }; $l=[Text.Encoding]::UTF8.GetString($b) -split "\`n"; for ($k=$l.Length-1; $k -ge 0; $k--) { if ($l[$k] -like '*"type":"assistant"*' -and $l[$k] -like '*"usage"*') { $tails[$id]=$l[$k]; break } } } catch {} }`,
+    tails,
+    '@{ procs=$procs; tails=$tails } | ConvertTo-Json -Compress -Depth 3',
+  ].join('\n')
+}
+
+/** What each open session holds; also which pids are alive. `undefined` when Windows can't say. */
+async function readLoads($: EngineInterface, live: LiveSession[]): Promise<Record<string, SessionLoad> | undefined> {
+  const root = (await configDir($)) + '\\projects\\'
+  const transcripts = live.map(s => [s.sessionId, root + projectFolder(s.cwd) + '\\' + s.sessionId + '.jsonl'] as [string, string])
+  let out: { procs?: unknown; tails?: Record<string, string> }
   try {
-    const r = await $.process.run(['tasklist', '/FO', 'CSV', '/NH', '/FI', 'IMAGENAME eq claude.exe'], { timeoutMs: 10_000 })
-    return r.exitCode === 0 ? parseTasklist(r.stdout) : undefined
+    const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', loadScript(transcripts)], { timeoutMs: 20_000 })
+    out = JSON.parse(r.stdout)
+  } catch {
+    return undefined
+  }
+  const procs = parseProcs(JSON.stringify(out.procs ?? []))
+  if (procs.length === 0) return undefined
+  alive = new Set(procs.map(p => p.pid))
+  let ports = new Map<number, number[]>()
+  try {
+    ports = parseNetstat((await $.process.run(['netstat', '-ano', '-p', 'TCP'], { timeoutMs: 10_000 })).stdout)
+  } catch {
+    // No ports this time: the rest still shows.
+  }
+  const own = await ownContext($)
+  const tree = treeOf(procs)
+  const result: Record<string, SessionLoad> = {}
+  for (const s of live) {
+    const load: SessionLoad = sessionLoad(s.pid, tree, ports)
+    const usage = lastUsage(out.tails?.[s.sessionId] ?? '')
+    if (s.sessionId === me && own) load.context = own.percent
+    else if (usage) load.context = contextPercent(usage.tokens, usage.model, own)
+    result[s.sessionId] = load
+  }
+  return result
+}
+
+/** This session's context, exact, and its model: the yardstick for the others. */
+async function ownContext($: EngineInterface): Promise<{ model: string; window: number; percent: number } | undefined> {
+  try {
+    const u = await $.session.usage()
+    // Before the first answer the session has no measure yet.
+    if (u.context.percent === undefined) return undefined
+    return { model: await $.session.model(), window: u.context.window, percent: Math.round(u.context.percent) }
   } catch {
     return undefined
   }
@@ -82,11 +141,12 @@ async function runningClaudes($: EngineInterface): Promise<Set<number> | undefin
 async function refresh($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   if (!me) me = await $.session.id()
-  if (now - aliveAt >= ALIVE_MS) {
-    alive = await runningClaudes($)
-    aliveAt = now
-  }
   const found = await readSessions($, await configDir($))
+  if (now - procsAt >= PROCS_MS) {
+    procsAt = now
+    const read = await readLoads($, found)
+    if (read) await update($, loads, () => read)
+  }
   const open = alive ? found.filter(s => alive!.has(s.pid) || s.sessionId === me) : found
   await update($, sessions, () => open)
   // The ages move even when the list doesn't.
@@ -96,7 +156,7 @@ async function refresh($: EngineInterface): Promise<void> {
 /** Starts the refresh while the pane is open; resolves once the first read is in. */
 async function start($: EngineInterface): Promise<void> {
   if (ticker) return
-  aliveAt = 0
+  procsAt = 0
   ticker = $.clock.every(REFRESH_MS, () => void refresh($))
   await refresh($)
 }
@@ -214,6 +274,28 @@ async function resume($: EngineInterface, s: PastSession): Promise<void> {
   }
 }
 
+/** Closes a branch and its whole tree, then reads the processes again so the row goes. */
+async function stopBranch($: EngineInterface, pid: number): Promise<void> {
+  try {
+    await $.process.run(['taskkill', '/PID', String(pid), '/T', '/F'], { timeoutMs: 15_000 })
+  } catch {
+    // Gone already, or not ours to close: the next read says which.
+  }
+  procsAt = 0
+  await refresh($)
+}
+
+/** Stop takes two presses: the first arms the button for a few seconds, the second closes. */
+async function pressStop($: EngineInterface, pid: number): Promise<void> {
+  if ((await read($, armed)) !== pid) {
+    await update($, armed, () => pid)
+    $.clock.after(ARM_MS, () => void update($, armed, was => (was === pid ? 0 : was)))
+    return
+  }
+  await update($, armed, () => 0)
+  await stopBranch($, pid)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await homeDir($)
@@ -275,11 +357,18 @@ export const register: Register = on => {
     )
 
     if (shown === 'open') {
-      const nameW = Math.min(22, Math.max(10, Math.floor(width * 0.25)))
+      const held = await read($, loads)
+      const armedPid = await read($, armed)
+      const markW = 2
       const stateW = 10
       const ageW = 8
-      const markW = 2
-      const folderW = Math.max(8, width - nameW - stateW - ageW - markW - 4)
+      const ctxW = 8
+      const ramW = 8
+      const nameW = Math.min(22, Math.max(10, Math.floor(width * 0.22)))
+      const folderW = Math.max(8, width - markW - nameW - stateW - ageW - ctxW - ramW - 6)
+      const stopW = 11
+      const portsW = 14
+      const labelW = Math.max(10, width - 4 - portsW - ramW - stopW - 3)
       return (
         <Box flexDirection="column">
           {tabs}
@@ -287,23 +376,52 @@ export const register: Register = on => {
           {live.map(s => {
             const isBusy = s.status === 'busy'
             const isMe = s.sessionId === me
+            const load = held[s.sessionId]
             return (
-              <Box key={s.sessionId} flexDirection="row" columnGap={1}>
-                <Box width={markW}>
-                  <Text color={isBusy ? 'success' : undefined} dimColor={!isBusy}>{isBusy ? '●' : '○'}</Text>
+              <Box key={s.sessionId} flexDirection="column">
+                <Box flexDirection="row" columnGap={1}>
+                  <Box width={markW}>
+                    <Text color={isBusy ? 'success' : undefined} dimColor={!isBusy}>{isBusy ? '●' : '○'}</Text>
+                  </Box>
+                  <Box width={nameW}>
+                    <Text bold={isMe} wrap="truncate-end">{s.name}</Text>
+                  </Box>
+                  <Box width={folderW}>
+                    <Text dimColor wrap="truncate-start">{shortPath(s.cwd, home)}</Text>
+                  </Box>
+                  <Box width={stateW}>
+                    <Text dimColor={!isBusy}>{statusLabel(s.status)}</Text>
+                  </Box>
+                  <Box width={ageW}>
+                    <Text dimColor>{since(s.startedAt, now)}</Text>
+                  </Box>
+                  <Box width={ctxW}>
+                    <Text dimColor>{load?.context !== undefined ? 'ctx ' + load.context + '%' : ''}</Text>
+                  </Box>
+                  <Box width={ramW}>
+                    <Text>{load ? bytes(load.ram) : ''}</Text>
+                  </Box>
                 </Box>
-                <Box width={nameW}>
-                  <Text bold={isMe} wrap="truncate-end">{s.name}</Text>
-                </Box>
-                <Box width={folderW}>
-                  <Text dimColor wrap="truncate-start">{shortPath(s.cwd, home)}</Text>
-                </Box>
-                <Box width={stateW}>
-                  <Text dimColor={!isBusy}>{statusLabel(s.status)}</Text>
-                </Box>
-                <Box width={ageW}>
-                  <Text dimColor>{since(s.startedAt, now)}</Text>
-                </Box>
+                {(load?.branches ?? []).map(b => (
+                  <Box key={'branch-' + b.pid} flexDirection="row" columnGap={1}>
+                    <Text>{'   '}</Text>
+                    <Box width={labelW}>
+                      <Text wrap="truncate-end">{b.label}</Text>
+                    </Box>
+                    <Box width={portsW}>
+                      <Text color="success">{b.ports.map(p => ':' + p).join(' ')}</Text>
+                    </Box>
+                    <Box width={ramW}>
+                      <Text dimColor>{bytes(b.ram)}</Text>
+                    </Box>
+                    <Button
+                      key={'stop-' + b.pid}
+                      label={armedPid === b.pid ? 'Sicuro?' : 'Stop'}
+                      variant={armedPid === b.pid ? 'primary' : undefined}
+                      onPress={() => void pressStop($, b.pid)}
+                    />
+                  </Box>
+                ))}
               </Box>
             )
           })}
