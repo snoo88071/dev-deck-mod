@@ -20,7 +20,7 @@ Hide
 # A clean start, without the markers of the session that runs VHS, in the demo's own configuration.
 Type "Get-ChildItem Env: | Where-Object Name -like 'CLAUDE*' | ForEach-Object { Remove-Item ('Env:' + $_.Name) }; $env:CLAUDE_CONFIG_DIR = (Join-Path $HOME 'dev-deck-demo\.claude')"
 Enter
-Type "cd ~/dev-deck-demo/demo-shop; claude --plugin-dir C:/path/to/dev-deck-mod"
+Type "$mod = (Get-Location).Path; cd ~/dev-deck-demo/demo-shop; claude --plugin-dir $mod"
 Enter
 Sleep 15s
 
