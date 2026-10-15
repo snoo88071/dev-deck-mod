@@ -42,6 +42,13 @@ describe('the state a row shows', () => {
     expect(rowState(s, NOW, { hasMod: false, stoppedAt: NOW - 1_000 })).toBe('done')
   })
 
+  test('"shell", stopped with a command left in the background, is stopped too', () => {
+    const s = { ...live('a', 'shell', NOW - 1_000), startedAt: NOW - 3_600_000 }
+    expect(rowState(s, NOW, { hasMod: true })).toBe('idle')
+    expect(rowState(s, NOW, { hasMod: true, presence: { state: 'done', at: NOW - 1_000 } })).toBe('done')
+    expect(justFinished(new Map([['a', 'busy']]), [s]).map(x => x.sessionId)).toEqual(['a'])
+  })
+
   test('finished means busy at the last read, idle now', () => {
     const before = new Map([['a', 'busy'], ['b', 'idle'], ['c', 'busy']])
     const now = [live('a', 'idle'), live('b', 'idle'), live('c', 'busy'), live('d', 'idle')]

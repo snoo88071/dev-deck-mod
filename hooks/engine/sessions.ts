@@ -49,7 +49,7 @@ export function shownState(
   stoppedAt?: number,
 ): 'busy' | 'done' | 'idle' | string {
   if (s.status === 'busy') return 'busy'
-  if (s.status !== 'idle') return s.status
+  // Anything but busy is stopped: `idle`, or `shell` with a command left running in the background.
   if (stoppedAt !== undefined) return now - stoppedAt < DONE_MS ? 'done' : 'idle'
   const answered = s.statusSince > 0 && s.statusSince - s.startedAt > START_MS
   return answered && now - s.statusSince < DONE_MS ? 'done' : 'idle'
@@ -67,14 +67,14 @@ export function rowState(
 ): 'busy' | 'done' | 'idle' | string {
   if (!source.hasMod) return shownState(s, now, source.stoppedAt)
   if (s.status === 'busy') return 'busy'
-  if (s.status !== 'idle') return s.status
+  // Anything but busy is stopped: `idle`, or `shell` with a command left running in the background.
   const p = source.presence
   return p?.state === 'done' && now - p.at < DONE_MS ? 'done' : 'idle'
 }
 
 /** The sessions that were at work at the last read and have stopped since. */
 export function justFinished(before: ReadonlyMap<string, string>, now: readonly LiveSession[]): LiveSession[] {
-  return now.filter(s => before.get(s.sessionId) === 'busy' && s.status === 'idle')
+  return now.filter(s => before.get(s.sessionId) === 'busy' && s.status !== 'busy')
 }
 
 /** The last title Claude Code wrote, in findstr's output of a transcript's `aiTitle` lines. */

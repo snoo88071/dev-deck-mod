@@ -42,6 +42,9 @@ export function parseNetstat(text: string): Map<number, number[]> {
 /** Wrappers that only start something else: a branch is named after what they start. */
 const WRAPPERS = new Set(['cmd.exe', 'conhost.exe', 'bash.exe', 'sh.exe', 'powershell.exe', 'pwsh.exe', 'npx.exe', 'npm.exe'])
 
+/** Package managers' own scripts: `npm run dev` is node running npm-cli.js, which starts the tool. */
+const RUNNERS = /npm-cli\.js|yarn\.c?js|pnpm\.c?js/i
+
 /** What a command line runs, in a word: a package, a plugin, a script. */
 function nameIn(cmd: string): string | undefined {
   // `npx ^"pkg^"` (through cmd) or `npx-cli.js" "pkg`
@@ -63,6 +66,7 @@ function nameIn(cmd: string): string | undefined {
 export function labelOf(procs: readonly Proc[]): string {
   for (const p of procs) {
     if (WRAPPERS.has(p.name.toLowerCase()) && !/npx/i.test(p.cmd)) continue
+    if (RUNNERS.test(p.cmd) && !/npx-cli/i.test(p.cmd)) continue
     const name = nameIn(p.cmd)
     if (name) return name
   }

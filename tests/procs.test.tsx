@@ -45,6 +45,17 @@ describe('naming what a session started', () => {
   test('a dev server behind a shell and npm is named after the tool', () => {
     expect(labelOf(branch(27060))).toBe('vite')
   })
+
+  test("npm's own script is a runner too: `npm run dev` from Claude's Bash tool is named after vite", () => {
+    // As recorded: Git Bash, then node running npm-cli.js, then cmd, then vite.
+    const recorded = [
+      p(1, 0, 'bash.exe', '"C:\\Program Files\\Git\\bin\\bash.exe" -c "source snapshot.sh && npm run dev"'),
+      p(2, 1, 'node.exe', '"C:\\Program Files\\nodejs\\node.exe" "C:\\Program Files\\nodejs\\node_modules\\npm\\bin\\npm-cli.js" run dev'),
+      p(3, 2, 'cmd.exe', 'C:\\WINDOWS\\system32\\cmd.exe /d /s /c vite --port 5173 --strictPort'),
+      p(4, 3, 'node.exe', '"node" "C:\\Users\\me\\demo-shop\\node_modules\\.bin\\..\\vite\\bin\\vite.js" --port 5173 --strictPort'),
+    ]
+    expect(labelOf(recorded)).toBe('vite')
+  })
 })
 
 describe('what a session holds', () => {

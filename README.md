@@ -4,6 +4,8 @@ A Claude Code mod for the CLI, inspired by [Dev Deck](https://github.com/snoo880
 terminal sessions in a pane, what each one keeps running, the past ones to resume with a key, your
 messages as chapters to jump back to, and a guard that stops Claude from starting a second dev server.
 
+![Claude starts a dev server and the mod says it stays on; Claude tries again and the guard asks first; then the /deck pane: what the session runs, History, Chapters](demo/dev-deck-mod.gif)
+
 Windows 10 and 11. It looks only at Claude Code sessions started from a terminal.
 
 ## Install
@@ -44,7 +46,10 @@ Enter presses. Esc gives the keyboard back to the prompt, Ctrl+X then X closes t
 
 Outside the pane:
 
-- **Above the prompt**, while this session keeps a server on: `vite :5173 · 612 MB · ctx 41%`.
+- **Above the prompt**, while this session keeps a server on: `vite :5173 · 612 MB · ctx 41%`. And
+  the other CLI sessions that need you or are done: `⏳ Blog layout is waiting for you` (Claude
+  stopped on a permission or a question), `✓ Cart fix is done`. Only in the session you typed in
+  last, and gone once you go to that session.
 - **Under an answer** that started a server still running: `vite :5173 stays on`.
 - **Guard**: when Claude is about to start a dev server (`npm run dev`, `vite`, `http-server`,
   `python -m http.server`, …) and one is already running for that project, or on the port it asks
@@ -96,6 +101,10 @@ Claude Code writes `.claude-plugin/types/` each time it loads the mod from this 
 that calls `$` lives in `hooks/register.tsx`, since the validator follows `$` only within one file;
 `hooks/engine/` holds pure functions, each tested on its own, and the words in every language are in
 `hooks/engine/i18n.ts`.
+
+The GIF is recorded with [VHS](https://github.com/charmbracelet/vhs) from `demo/scene.tape`, in a
+Claude Code configuration of its own (`CLAUDE_CONFIG_DIR`), so no real session shows up in it;
+`demo/history.tape` fills that configuration's History first.
 
 ## License
 

@@ -242,7 +242,7 @@ async function readLoads($: EngineInterface, live: LiveSession[]): Promise<Recor
   alive = new Set(procs.map(p => p.pid))
   let ports = new Map<number, number[]>()
   try {
-    ports = parseNetstat((await $.process.run(['netstat', '-ano', '-p', 'TCP'], { timeoutMs: 10_000 })).stdout)
+    ports = parseNetstat((await $.process.run(['netstat', '-ano'], { timeoutMs: 10_000 })).stdout)
   } catch {
     // No ports this time: the rest still shows.
   }
@@ -540,7 +540,7 @@ async function readTree($: EngineInterface) {
     const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', loadScript([])], { timeoutMs: 20_000 })
     const procs = parseProcs(JSON.stringify(JSON.parse(r.stdout).procs ?? []))
     if (procs.length === 0) return undefined
-    const net = await $.process.run(['netstat', '-ano', '-p', 'TCP'], { timeoutMs: 10_000 })
+    const net = await $.process.run(['netstat', '-ano'], { timeoutMs: 10_000 })
     return { tree: treeOf(procs), ports: parseNetstat(net.stdout) }
   } catch {
     return undefined
