@@ -788,53 +788,64 @@ export const register: Register = on => {
       const portsW = 14
       const labelW = Math.max(10, width - 4 - portsW - ramW - stopW - 3)
       const left = await read($, orphans)
-      // One thing a session started, or left behind: name, ports, memory, Stop.
-      const branchRow = (b: Branch) => (
-        <Box key={'branch-' + b.pid} flexDirection="row" columnGap={1}>
-          <Text>{'   '}</Text>
-          <Box width={labelW}>
-            <Text wrap="truncate-end">{b.label}</Text>
-          </Box>
-          <Box width={portsW}>
-            <Text color="success">{b.ports.map(p => ':' + p).join(' ')}</Text>
-          </Box>
-          <Box width={ramW}>
-            <Text dimColor>{bytes(b.ram)}</Text>
-          </Box>
-          <Button
-            key={'stop-' + b.pid}
-            label={armedPid === b.pid ? t('sure') : t('stop')}
-            variant={armedPid === b.pid ? 'primary' : undefined}
-            onPress={() => pressStop($, b.pid)}
-          />
-        </Box>
-      )
+      // One thing a session started, or left behind, a level under it: name, ports, memory, Stop.
+      // Stop stays quiet until it has the focus or its first press arms it.
+      const branchRows = (list: Branch[]) =>
+        list.map((b, i) => {
+          const isArmed = armedPid === b.pid
+          return (
+            <Box key={'branch-' + b.pid} flexDirection="row" columnGap={1}>
+              <Text color="subtle">{i === list.length - 1 ? ' └' : ' ├'}</Text>
+              <Box width={labelW}>
+                <Text wrap="truncate-end">{b.label}</Text>
+              </Box>
+              <Box width={portsW}>
+                <Text color="success">{b.ports.map(p => ':' + p).join(' ')}</Text>
+              </Box>
+              <Box width={ramW}>
+                <Text>{bytes(b.ram)}</Text>
+              </Box>
+              {isArmed ? (
+                <Button key={'stop-' + b.pid} label={t('sure')} variant="primary" onPress={() => pressStop($, b.pid)} />
+              ) : (
+                <Button key={'stop-' + b.pid} label={t('stop')} plain dimColor onPress={() => pressStop($, b.pid)} />
+              )}
+            </Box>
+          )
+        })
       return (
         <Box flexDirection="column">
           {tabs}
-          {live.length === 0 && <Text dimColor>{t('noOpenSessions')}</Text>}
+          {live.length === 0 && (
+            <Box marginTop={1}>
+              <Text dimColor>{t('noOpenSessions')}</Text>
+            </Box>
+          )}
           {live.map(s => {
             const state = shownState(s, now)
             const isBusy = state === 'busy'
             const isDone = state === 'done'
             const isMe = s.sessionId === me
             const load = held[s.sessionId]
+            // The session heads its branches: its title and memory in bold, its state in colour.
             return (
-              <Box key={s.sessionId} flexDirection="column">
+              <Box key={s.sessionId} flexDirection="column" marginTop={1}>
                 <Box flexDirection="row" columnGap={1}>
                   <Box width={markW}>
-                    <Text color={isBusy || isDone ? 'success' : undefined} dimColor={!isBusy && !isDone}>
-                      {isBusy ? '●' : isDone ? '✓' : '○'}
-                    </Text>
+                    <Text color={isBusy || isDone ? 'success' : 'subtle'}>{isBusy ? '●' : isDone ? '✓' : '○'}</Text>
                   </Box>
                   <Box width={nameW}>
-                    <Text bold={isMe} wrap="truncate-end">{s.title ?? s.name}</Text>
+                    <Text bold color={isMe ? 'claude' : undefined} wrap="truncate-end">
+                      {s.title ?? s.name}
+                    </Text>
                   </Box>
                   <Box width={folderW}>
                     <Text dimColor wrap="truncate-start">{shortPath(s.cwd, home)}</Text>
                   </Box>
                   <Box width={stateW}>
-                    <Text bold={isDone} dimColor={!isBusy && !isDone}>{statusLabel(state)}</Text>
+                    <Text bold={isDone} color={isBusy || isDone ? 'success' : undefined} dimColor={!isBusy && !isDone}>
+                      {statusLabel(state)}
+                    </Text>
                   </Box>
                   <Box width={ageW}>
                     <Text dimColor>{since(s.startedAt, now)}</Text>
@@ -843,19 +854,19 @@ export const register: Register = on => {
                     <Text dimColor>{load?.context !== undefined ? 'ctx ' + load.context + '%' : ''}</Text>
                   </Box>
                   <Box width={ramW}>
-                    <Text>{load ? bytes(load.ram) : ''}</Text>
+                    <Text bold>{load ? bytes(load.ram) : ''}</Text>
                   </Box>
                 </Box>
-                {(load?.branches ?? []).map(branchRow)}
+                {branchRows(load?.branches ?? [])}
               </Box>
             )
           })}
           {left.length > 0 && (
-            <Box key="orphans" flexDirection="column">
-              <Text dimColor bold>
+            <Box key="orphans" flexDirection="column" marginTop={1}>
+              <Text color="warning" bold>
                 {t('orphans')}
               </Text>
-              {left.map(branchRow)}
+              {branchRows(left)}
             </Box>
           )}
         </Box>
