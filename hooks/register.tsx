@@ -7,6 +7,7 @@ import { bytes, contextPercent, findOrphans, lastUsage, parseNetstat, parseProcs
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
 import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
 import { parseChapters, scrollId, textKey } from './engine/chapters'
+import { regLanguage, resolveLang, setLang, t } from './engine/i18n'
 import type { Branch, Chapter, DeckTab, LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
@@ -42,6 +43,7 @@ type IndexEntry = [size: number, mtimeMs: number, session: PastSession | 0]
 // Module variables: set again by session.start after every reload.
 let home = ''
 let me = ''
+let langKnown = false
 let ticker: Timer | undefined
 let alive: Set<number> | undefined
 let procsAt = 0
@@ -70,6 +72,29 @@ let reportFrom: number | undefined
 async function configDir($: EngineInterface): Promise<string> {
   const custom = await $.env.get('CLAUDE_CONFIG_DIR')
   return custom ? custom : (await homeDir($)) + '\\.claude'
+}
+
+/**
+ * Sets the mod's language once: `DEVDECK_LANG` when set (as in the app), else Windows' display
+ * language from the registry (~40 ms), else its regional format; English when none says.
+ */
+async function ensureLang($: EngineInterface): Promise<void> {
+  if (langKnown) return
+  langKnown = true
+  const forced = await $.env.get('DEVDECK_LANG')
+  if (forced?.trim()) return setLang(resolveLang(forced))
+  const places: [string, string][] = [
+    ['HKCU\\Control Panel\\Desktop', 'PreferredUILanguages'],
+    ['HKCU\\Control Panel\\International', 'LocaleName'],
+  ]
+  for (const [key, value] of places) {
+    try {
+      const tag = regLanguage((await $.process.run(['reg', 'query', key, '/v', value], { timeoutMs: 5_000 })).stdout)
+      if (tag) return setLang(resolveLang(tag))
+    } catch {
+      // Not there: the next place may say.
+    }
+  }
 }
 
 async function homeDir($: EngineInterface): Promise<string> {
@@ -167,6 +192,7 @@ async function ownContext($: EngineInterface): Promise<{ model: string; window: 
 }
 
 async function refresh($: EngineInterface): Promise<void> {
+  await ensureLang($)
   const now = await $.clock.now()
   if (!me) me = await $.session.id()
   const found = await readSessions($, await configDir($))
@@ -178,7 +204,7 @@ async function refresh($: EngineInterface): Promise<void> {
   const alivenow = alive ? found.filter(s => alive!.has(s.pid) || s.sessionId === me) : found
   const open = await withTitles($, alivenow, now)
   for (const s of justFinished(lastStatus, open)) {
-    if (s.sessionId !== me) $.ui.toast((s.title ?? s.name) + ' ha finito')
+    if (s.sessionId !== me) $.ui.toast(t('finished', { name: s.title ?? s.name }))
   }
   lastStatus = new Map(open.map(s => [s.sessionId, s.status]))
   await update($, sessions, () => open)
@@ -328,6 +354,7 @@ function scheduleOwnRead($: EngineInterface): void {
 
 /** What this session keeps on, for the band: its servers, its memory, its context. */
 async function readOwn($: EngineInterface): Promise<void> {
+  await ensureLang($)
   if (!me) me = await $.session.id()
   const mine = (await readSessions($, await configDir($))).find(s => s.sessionId === me)
   if (!mine) return
@@ -344,7 +371,7 @@ async function readOwn($: EngineInterface): Promise<void> {
     const born = up.filter(b => b.started >= from)
     if (born.length > 0) {
       const names = born.map(b => b.label + ' ' + b.ports.map(p => ':' + p).join(' ')).join(' · ')
-      $.ui.log(names + (born.length === 1 ? ' resta acceso' : ' restano accesi'))
+      $.ui.log(t(born.length === 1 ? 'leftOnOne' : 'leftOnMany', { names }))
     }
   }
 }
@@ -388,19 +415,19 @@ async function goTo($: EngineInterface, chapter: Chapter): Promise<void> {
   } catch {
     // No row by that id on this surface.
   }
-  if (!moved) $.ui.toast('Questo messaggio non è più nella conversazione')
+  if (!moved) $.ui.toast(t('goneMessage'))
 }
 
 /** Opens a Windows Terminal tab in the session's folder, resuming it. */
 async function resume($: EngineInterface, s: PastSession): Promise<void> {
   if (!(await $.fs.exists(s.cwd))) {
-    $.ui.toast('Cartella non trovata: ' + s.cwd)
+    $.ui.toast(t('noFolder', { path: s.cwd }))
     return
   }
   try {
     await $.process.run(resumeArgv(s.cwd, s.sessionId), { timeoutMs: 15_000 })
   } catch {
-    $.ui.toast('Windows Terminal non si è aperto')
+    $.ui.toast(t('noTerminal'))
   }
 }
 
@@ -429,9 +456,6 @@ async function readTree($: EngineInterface) {
   }
 }
 
-const REUSE = 'Riusa quello'
-const RESTART = 'Riavvia'
-const LAUNCH = 'Lancia lo stesso'
 
 /** Stop takes two presses: the first arms the button for a few seconds, the second closes. */
 async function pressStop($: EngineInterface, pid: number): Promise<void> {
@@ -447,9 +471,10 @@ async function pressStop($: EngineInterface, pid: number): Promise<void> {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await homeDir($)
+    await ensureLang($)
     me = await $.session.id()
     try {
-      await $.command.register({ name: 'deck', description: 'Your Claude Code CLI sessions, in a pane', immediate: true })
+      await $.command.register({ name: 'deck', description: t('commandDescription'), immediate: true })
     } catch {
       // The name is taken: the pane can't be opened, the rest of the mod still runs.
     }
@@ -520,20 +545,25 @@ export const register: Register = on => {
     const found = runningServer(start, commandFolder(command, await $.session.cwd()), snap.tree, snap.ports, live)
     if (!found) return next(e)
 
+    await ensureLang($)
     const where = found.ports.map(p => ':' + p).join(' ')
+    // The answer comes back as the label chosen: the same words both ways.
+    const reuse = t('reuse')
+    const restart = t('restart')
+    const launch = t('launch')
     const question =
       found.why === 'port'
-        ? `La porta ${start.port} è già presa da ${found.label} (${where}). Cosa faccio?`
-        : `Per questo progetto è già acceso ${found.label} (${where}). Cosa faccio?`
+        ? t('guardPort', { port: start.port ?? '', label: found.label, where })
+        : t('guardProject', { label: found.label, where })
     let choice: string
     try {
-      choice = await $.ui.ask(question, { header: 'Server', options: [REUSE, RESTART, LAUNCH] })
+      choice = await $.ui.ask(question, { header: t('guardHeader'), options: [reuse, restart, launch] })
     } catch {
       // Nobody to ask (claude -p), or the question was closed: the command goes on as asked.
       return next(e)
     }
-    if (choice === REUSE) return { deny: reuseNote(found) }
-    if (choice === RESTART) {
+    if (choice === reuse) return { deny: reuseNote(found) }
+    if (choice === restart) {
       try {
         await $.process.run(['taskkill', '/PID', String(found.pid), '/T', '/F'], { timeoutMs: 15_000 })
       } catch {
@@ -541,7 +571,7 @@ export const register: Register = on => {
       }
       return next(e)
     }
-    if (choice === LAUNCH) return next(e)
+    if (choice === launch) return next(e)
     // Typed under "Other": it's for Claude.
     return { deny: `A dev server is already running (${found.label}, ${where}). Before starting another, the person said: ${choice}` }
   }).catch(($, e, next) => next(e))
@@ -587,9 +617,9 @@ export const register: Register = on => {
     )
     const tabs = (
       <Box flexDirection="row" columnGap={3}>
-        {tabButton('open', 'Aperte', '1')}
-        {tabButton('history', 'Storico', '2')}
-        {tabButton('chapters', 'Capitoli', '3')}
+        {tabButton('open', t('tabOpen'), '1')}
+        {tabButton('history', t('tabHistory'), '2')}
+        {tabButton('chapters', t('tabChapters'), '3')}
       </Box>
     )
 
@@ -598,7 +628,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {tabs}
-          {list.length === 0 && <Text dimColor>Nessun messaggio</Text>}
+          {list.length === 0 && <Text dimColor>{t('noMessages')}</Text>}
           {list.map(ch => (
             <Box key={'chapter-' + ch.uuid} flexDirection="row">
               <Text dimColor>{(ch.at ? clock(ch.at) : '     ') + '  '}</Text>
@@ -639,7 +669,7 @@ export const register: Register = on => {
           </Box>
           <Button
             key={'stop-' + b.pid}
-            label={armedPid === b.pid ? 'Sicuro?' : 'Stop'}
+            label={armedPid === b.pid ? t('sure') : t('stop')}
             variant={armedPid === b.pid ? 'primary' : undefined}
             onPress={() => void pressStop($, b.pid)}
           />
@@ -648,7 +678,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {tabs}
-          {live.length === 0 && <Text dimColor>Nessuna sessione CLI aperta</Text>}
+          {live.length === 0 && <Text dimColor>{t('noOpenSessions')}</Text>}
           {live.map(s => {
             const state = shownState(s, now)
             const isBusy = state === 'busy'
@@ -689,7 +719,7 @@ export const register: Register = on => {
           {left.length > 0 && (
             <Box key="orphans" flexDirection="column">
               <Text dimColor bold>
-                Orfani
+                {t('orphans')}
               </Text>
               {left.map(branchRow)}
             </Box>
@@ -739,8 +769,8 @@ export const register: Register = on => {
         {tabs}
         <Input
           key="search"
-          label="Cerca"
-          placeholder="titolo, prompt, cartella"
+          label={t('search')}
+          placeholder={t('searchPlaceholder')}
           value={q}
           autoFocus
           onInput={(value: string) => void update($, query, () => value)}

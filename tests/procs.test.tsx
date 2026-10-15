@@ -95,7 +95,7 @@ describe('the context a session holds', () => {
 })
 
 test('Stop asks once more, then closes the branch and its tree', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   const clock = mock.clock(on, { now: 1_800_000_000_000 })
   const session = JSON.stringify({ pid: 18932, sessionId: 'me', cwd: 'C:\\Users\\me\\Desktop\\shop', startedAt: 0, entrypoint: 'cli', name: 'shop', status: 'busy' })
   let procs = TREE
@@ -141,7 +141,7 @@ test('Stop asks once more, then closes the branch and its tree', async ($, on) =
 
   // Left alone, the button disarms.
   await clock.advance(3_000)
-  expect((await ui.find({ key: 'stop-27060' }))?.props.label).toBe('Stop')
+  expect((await ui.find({ key: 'stop-27060' }))?.props.label).toBe('Spegni')
 
   await ui.press({ key: 'stop-27060' })
   await ui.press({ key: 'stop-27060' })

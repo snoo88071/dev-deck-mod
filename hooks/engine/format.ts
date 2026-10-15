@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 /** How long since `from`, in the two largest units: `45s`, `12m`, `2h 14m`, `3d 5h`. */
 export function since(from: number, now: number): string {
   const s = Math.max(0, Math.floor((now - from) / 1000))
@@ -34,8 +36,8 @@ export function fitStart(text: string, width: number): string {
 
 /** The word for a session's state. */
 export function statusLabel(status: string): string {
-  if (status === 'busy') return 'al lavoro'
-  if (status === 'done') return 'finito'
-  if (status === 'idle') return 'ferma'
+  if (status === 'busy') return t('stateBusy')
+  if (status === 'done') return t('stateDone')
+  if (status === 'idle') return t('stateIdle')
   return status || '?'
 }

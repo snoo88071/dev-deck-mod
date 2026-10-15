@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { batches, byDay, dayLabel, parseTranscript, resumeArgv, search } from '../hooks/engine/history'
+import { setLang } from '../hooks/engine/i18n'
 import type { PastSession } from '../types'
 
 const NOW = new Date(2026, 9, 14, 12, 0).getTime()
@@ -72,6 +73,7 @@ describe('finding and grouping', () => {
   })
 
   test('newest first, one heading per day', () => {
+    setLang('it')
     const groups = byDay(list, NOW)
     expect(groups.map(g => g.day)).toEqual(['oggi', 'ieri'])
     expect(dayLabel(new Date(2026, 9, 5, 9).getTime(), NOW)).toBe('lun 5 ott')
@@ -90,7 +92,7 @@ describe('finding and grouping', () => {
 })
 
 test('History: search, then Enter on a row resumes it in a new tab', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   mock.clock(on, { now: NOW })
   mock.store(on)
   const root = 'C:\\Users\\me\\.claude\\projects'

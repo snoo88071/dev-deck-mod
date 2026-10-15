@@ -37,7 +37,7 @@ describe('the state a row shows', () => {
 })
 
 test('the pane shows titles, and a toast when another session finishes', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   const clock = mock.clock(on, { now: NOW })
   const file = (pid: number, id: string, status: string, since: number) =>
     JSON.stringify({ pid, sessionId: id, cwd: 'C:\\Users\\me\\Desktop\\shop', startedAt: 0, entrypoint: 'cli', name: id + '-4b', status, statusUpdatedAt: since })

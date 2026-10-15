@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { shortPath, since, statusLabel } from '../hooks/engine/format'
+import { setLang } from '../hooks/engine/i18n'
 import { parseSession } from '../hooks/engine/sessions'
 
 const HOME = 'C:\\Users\\me'
@@ -46,13 +47,14 @@ describe('the words a row shows', () => {
   })
 
   test('busy and idle in words', () => {
+    setLang('it')
     expect(statusLabel('busy')).toBe('al lavoro')
     expect(statusLabel('idle')).toBe('ferma')
   })
 })
 
 test('/deck shows the open CLI sessions, not the others and not a dead one', async ($, on) => {
-  mock.env(on, { USERPROFILE: HOME })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: HOME })
   mock.clock(on, { now: NOW })
   const files: Record<string, string> = {
     '100.json': cli(100),

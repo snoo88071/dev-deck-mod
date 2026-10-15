@@ -43,7 +43,7 @@ describe('what sessions left behind', () => {
 })
 
 test('Orfani shows under the sessions, and Stop closes one', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   mock.clock(on, { now: NOW })
   const session = JSON.stringify({ pid: 50, sessionId: 'me', cwd: 'C:\\shop', startedAt: 0, entrypoint: 'cli', name: 'shop', status: 'idle', statusUpdatedAt: 0 })
   let procs = [

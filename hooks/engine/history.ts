@@ -1,4 +1,5 @@
 import type { PastSession } from '../../types'
+import { t } from './i18n'
 
 /**
  * The history is read from the transcripts in `<config>/projects/<folder>/<id>.jsonl`, the files
@@ -80,16 +81,13 @@ function dayOf(at: number): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
-const WEEKDAYS = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab']
-const MONTHS = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic']
-
-/** A day's heading: `oggi`, `ieri`, or `lun 12 ott`. */
+/** A day's heading in the mod's language: `today`, `yesterday`, or `Mon 12 Oct` (`lun 12 ott`). */
 export function dayLabel(at: number, now: number): string {
   const days = Math.round((dayOf(now) - dayOf(at)) / 86_400_000)
-  if (days === 0) return 'oggi'
-  if (days === 1) return 'ieri'
+  if (days === 0) return t('today')
+  if (days === 1) return t('yesterday')
   const d = new Date(at)
-  return WEEKDAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()]
+  return t('weekdays').split(' ')[d.getDay()] + ' ' + d.getDate() + ' ' + t('months').split(' ')[d.getMonth()]
 }
 
 /** `14:02`. */

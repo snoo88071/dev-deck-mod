@@ -31,7 +31,7 @@ describe('the chapters of a conversation', () => {
 })
 
 test('Capitoli: tab 3 lists the messages; a press that cannot scroll says so', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   mock.clock(on, { now: NOW })
   const session = JSON.stringify({ pid: 1, sessionId: 'me', cwd: 'C:\\Users\\me\\Desktop\\shop', startedAt: 0, entrypoint: 'cli', name: 'shop', status: 'idle', statusUpdatedAt: 0 })
   const toasts: string[] = []

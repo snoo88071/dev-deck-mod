@@ -4,7 +4,7 @@ const NOW = 1_800_000_000_000
 const MB = 1024 * 1024
 
 test('the band shows the servers this session keeps on, read shortly after a command', async ($, on) => {
-  mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
   const clock = mock.clock(on, { now: NOW })
   const session = JSON.stringify({ pid: 50, sessionId: 'me', cwd: 'C:\\shop', startedAt: 0, entrypoint: 'cli', name: 'shop', status: 'busy', statusUpdatedAt: 0 })
   const claude = { i: 50, p: 1, n: 'claude.exe', w: 300 * MB, c: 'claude' }

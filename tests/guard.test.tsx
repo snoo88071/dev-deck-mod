@@ -86,7 +86,7 @@ describe('the question, and each answer', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const world = (on: any, answer: string | Error) => {
     const log = { asked: [] as string[], killed: [] as string[][], ran: [] as string[] }
-    mock.env(on, { USERPROFILE: 'C:\\Users\\me' })
+    mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
     on('session.cwd', async () => ({ value: SHOP }))
     on('fs.list', async () => ({ value: [{ name: '50.json', kind: 'file' as const, size: 1, mtimeMs: 0, isLink: false }] }))
     on('fs.read', async () => ({ value: session }))
