@@ -6,3 +6,5 @@ node_modules/
 demo/test.gif
 demo/.history.gif
 demo/clean.gif
+# Local tools write here: never part of the mod.
+.remember/
