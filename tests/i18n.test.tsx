@@ -1,16 +1,12 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { DICTS, regLanguage, resolveLang } from '../hooks/engine/i18n'
-import type { Lang } from '../hooks/engine/i18n'
-
-/** The languages translated so far; the others say it in English until theirs is written. */
-const DONE: Lang[] = ['en', 'it']
+import { DICTS, LANGS, regLanguage, resolveLang } from '../hooks/engine/i18n'
 
 describe('the dictionaries', () => {
   const keys = Object.keys(DICTS.en).sort()
   const holes = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(m => m[1]).sort()
 
-  for (const lang of DONE) {
+  for (const lang of LANGS) {
     test(`${lang}: every key, with the same {placeholders} as English`, () => {
       const dict = DICTS[lang]
       expect(Object.keys(dict).sort()).toEqual(keys)
@@ -69,6 +65,10 @@ test('DEVDECK_LANG=en: the pane in English', async ($, on) => {
 
 test("no DEVDECK_LANG: Windows' language, from the registry", async ($, on) => {
   expect(await tabsIn($, on, {}, '    PreferredUILanguages    REG_MULTI_SZ    it-IT\\0en-US')).toEqual(['Aperte', 'Storico', 'Capitoli'])
+})
+
+test('DEVDECK_LANG=fr: the pane in French', async ($, on) => {
+  expect(await tabsIn($, on, { DEVDECK_LANG: 'fr' }, '')).toEqual(['Ouvertes', 'Historique', 'Chapitres'])
 })
 
 test('a language the mod lacks: English', async ($, on) => {
