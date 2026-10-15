@@ -4,3 +4,5 @@ node_modules/
 .claude/plans/
 # The test take shows the author's real sessions: never committed.
 demo/test.gif
+demo/.history.gif
+demo/clean.gif
