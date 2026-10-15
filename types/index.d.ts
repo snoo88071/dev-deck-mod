@@ -87,6 +87,8 @@ declare module 'claude-code' {
       band: BandState
       /** What sessions left running when they went away. */
       orphans: Branch[]
+      /** The other sessions waiting for the person or done, for the band; empty outside the session they're in. */
+      alerts: { sessionId: string; label: string; state: 'waiting' | 'done' }[]
     }
   }
 }

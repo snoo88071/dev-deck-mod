@@ -8,6 +8,8 @@ import { commandFolder, reuseNote, runningServer, serverStart } from './engine/g
 import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
 import { parseChapters, scrollId, textKey } from './engine/chapters'
 import { regLanguage, resolveLang, setLang, t } from './engine/i18n'
+import { INPUT, PRESENCE, alertsFor } from './engine/alerts'
+import type { Presence } from './engine/alerts'
 import type { Branch, Chapter, DeckTab, LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
@@ -30,9 +32,14 @@ const armed = atom({ plugin: 'dev-deck-mod', key: 'armed' } as const, 0)
 const chapters = atom({ plugin: 'dev-deck-mod', key: 'chapters' } as const, [])
 const band = atom({ plugin: 'dev-deck-mod', key: 'band' } as const, { servers: [], ram: 0 })
 const orphans = atom({ plugin: 'dev-deck-mod', key: 'orphans' } as const, [])
+const alerts = atom({ plugin: 'dev-deck-mod', key: 'alerts' } as const, [])
 
 /** After a command, the band waits this long before reading: a server takes a moment to listen. */
 const OWN_DELAY_MS = 3_000
+/** The other sessions' states are read this often, pane open or not: a few small store reads. */
+const ALERTS_MS = 3_000
+/** A closed session's state is forgotten after this long (a crash leaves it behind). */
+const PRESENCE_TTL_MS = 24 * 3_600_000
 
 /**
  * One transcript as the index last saw it: its size, its last write, and what it held,
@@ -65,8 +72,77 @@ let turnStartedAt = 0
 let ranCommand = false
 /** Set when an answer ended: the next read says which servers born since then are still up. */
 let reportFrom: number | undefined
+/** What this session last said about itself, and how it names itself to the others. */
+let ownState: Presence['state'] | undefined
+let ownLabel = ''
+/** Whether this session is a terminal one: only those take part in the alerts. */
+let isCli = false
+let alertTimer: Timer | undefined
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
+
+/** Tells the other sessions what this one is doing now. */
+async function publish($: EngineInterface, state: Presence['state']): Promise<void> {
+  if (!isCli || !me) return
+  ownState = state
+  const presence: Presence = { state, label: ownLabel || me.slice(0, 8), at: await $.clock.now() }
+  try {
+    await $.store.set(PRESENCE + me, presence)
+  } catch {
+    // Not written this time: the next change says it again.
+  }
+}
+
+/** How this session names itself: Claude's title for it once there is one, else its name. */
+async function refreshLabel($: EngineInterface): Promise<void> {
+  const mine = (await readSessions($, await configDir($))).find(s => s.sessionId === me)
+  if (!mine) return
+  ownLabel = ownLabel || mine.name
+  try {
+    const path = (await configDir($)) + '\\projects\\' + projectFolder(mine.cwd) + '\\' + me + '.jsonl'
+    const r = await $.process.run(['findstr', '/c:"aiTitle"', path], { timeoutMs: 10_000 })
+    ownLabel = lastTitle(r.stdout) ?? ownLabel
+  } catch {
+    // No transcript yet: the name stands in.
+  }
+}
+
+/** Starts reading the other sessions' states, once: from session.start, or the first event after a reload. */
+async function ensureAlerts($: EngineInterface): Promise<void> {
+  if (alertTimer) return
+  if (!me) me = await $.session.id()
+  await ensureLang($)
+  alertTimer = $.clock.every(ALERTS_MS, () => void readAlerts($).catch(() => {}))
+  await readAlerts($).catch(() => {})
+  if (isCli && !ownLabel) await refreshLabel($)
+}
+
+/** Reads what every open CLI session last said, for the band of the session the person is in. */
+async function readAlerts($: EngineInterface): Promise<void> {
+  const live = await readSessions($, await configDir($))
+  isCli = live.some(s => s.sessionId === me)
+  if (!isCli) return
+  const now = await $.clock.now()
+  const ids = new Set(live.map(s => s.sessionId))
+  const presences: Record<string, Presence> = {}
+  const inputs: Record<string, number> = {}
+  for (const key of await $.store.keys()) {
+    if (key.startsWith(PRESENCE)) {
+      const id = key.slice(PRESENCE.length)
+      const p = (await $.store.get(key)) as Presence | undefined
+      if (!p) continue
+      if (!ids.has(id) && now - p.at > PRESENCE_TTL_MS) await $.store.delete(key)
+      else presences[id] = p
+    } else if (key.startsWith(INPUT)) {
+      const id = key.slice(INPUT.length)
+      const at = Number(await $.store.get(key)) || 0
+      if (!ids.has(id) && now - at > PRESENCE_TTL_MS) await $.store.delete(key)
+      else inputs[id] = at
+    }
+  }
+  const { show, alerts: list } = alertsFor(me, presences, inputs, ids)
+  await update($, alerts, () => (show ? list : []))
+}
 
 /** Where Claude Code keeps its files: `CLAUDE_CONFIG_DIR`, or `.claude` in the home folder. */
 async function configDir($: EngineInterface): Promise<string> {
@@ -490,6 +566,38 @@ export const register: Register = on => {
       void start($)
       if ((await read($, tab)) === 'history') void rescan($)
     }
+    await ensureAlerts($)
+    return next(e)
+  })
+
+  // The person typed here: this is the session they're in, and whatever it had to say is seen.
+  on('prompt.submit', async ($, e, next) => {
+    await ensureAlerts($)
+    if (isCli) await $.store.set(INPUT + me, await $.clock.now()).catch(() => {})
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A permission to give: the session waits for the person.
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision === 'ask') await publish($, 'waiting')
+    return verdict
+  }).catch(($, e, next) => next(e))
+
+  // A question Claude asks waits for the person too; once a tool runs, the session is at work again.
+  on('tool.call', async ($, e, next) => {
+    if (String(e.tool) === 'AskUserQuestion') await publish($, 'waiting')
+    const ran = await next(e)
+    if (ownState === 'waiting') await publish($, 'busy')
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // A session that ends says nothing more.
+  on('session.end', async ($, e, next) => {
+    if (isCli && me) {
+      await $.store.delete(PRESENCE + me).catch(() => {})
+      await $.store.delete(INPUT + me).catch(() => {})
+    }
     return next(e)
   })
 
@@ -511,31 +619,50 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     turnStartedAt = await $.clock.now()
     ranCommand = false
+    await ensureAlerts($)
+    await publish($, 'busy')
     return next(e)
   })
 
   // At the end of each answer, for what changed some other way; after one that ran commands,
-  // the read also says which servers it left on.
+  // the read also says which servers it left on. The other sessions learn this one is done.
   on('turn.complete', async ($, e, next) => {
     if (ranCommand && turnStartedAt > 0) reportFrom = turnStartedAt
     scheduleOwnRead($)
+    await refreshLabel($)
+    await publish($, 'done')
     return next(e)
   })
 
-  // What this session keeps on, above the prompt; nothing when no server is up.
+  // Above the prompt: the other sessions waiting for you or done, then what this one keeps on.
+  // Nothing when there's nothing to say.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface === 'mobile') return next(e)
     const state = await read($, band)
-    if (state.servers.length === 0) return next(e)
+    const others = await read($, alerts)
+    if (state.servers.length === 0 && others.length === 0) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     const servers = state.servers.map(s => s.label + ' ' + s.ports.map(p => ':' + p).join(' ')).join(' · ')
     const rest = ' · ' + bytes(state.ram) + (state.context !== undefined ? ' · ctx ' + state.context + '%' : '')
     return (
-      <Box flexDirection="row">
-        <Text color="success" wrap="truncate-end">
-          {servers}
-        </Text>
-        <Text dimColor>{rest}</Text>
+      <Box flexDirection="column">
+        {others.length > 0 && (
+          <Box key="alerts" flexDirection="row" columnGap={2}>
+            {others.map(a => (
+              <Text key={'alert-' + a.sessionId} color={a.state === 'waiting' ? 'warning' : 'success'} wrap="truncate-end">
+                {(a.state === 'waiting' ? '⏳ ' : '✓ ') + t(a.state === 'waiting' ? 'waiting' : 'finished', { name: a.label })}
+              </Text>
+            ))}
+          </Box>
+        )}
+        {state.servers.length > 0 && (
+          <Box key="servers" flexDirection="row">
+            <Text color="success" wrap="truncate-end">
+              {servers}
+            </Text>
+            <Text dimColor>{rest}</Text>
+          </Box>
+        )}
       </Box>
     )
   })
