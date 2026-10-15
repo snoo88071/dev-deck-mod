@@ -89,6 +89,8 @@ declare module 'claude-code' {
       orphans: Branch[]
       /** The other sessions waiting for the person or done, for the band; empty outside the session they're in. */
       alerts: { sessionId: string; label: string; state: 'waiting' | 'done' }[]
+      /** The key of the pane's element holding the focus. */
+      focused: string
     }
   }
 }

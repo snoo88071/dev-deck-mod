@@ -33,6 +33,7 @@ const chapters = atom({ plugin: 'dev-deck-mod', key: 'chapters' } as const, [])
 const band = atom({ plugin: 'dev-deck-mod', key: 'band' } as const, { servers: [], ram: 0 })
 const orphans = atom({ plugin: 'dev-deck-mod', key: 'orphans' } as const, [])
 const alerts = atom({ plugin: 'dev-deck-mod', key: 'alerts' } as const, [])
+const focused = atom({ plugin: 'dev-deck-mod', key: 'focused' } as const, '')
 
 /** After a command, the band waits this long before reading: a server takes a moment to listen. */
 const OWN_DELAY_MS = 3_000
@@ -710,6 +711,13 @@ export const register: Register = on => {
     return { deny: `A dev server is already running (${found.label}, ${where}). Before starting another, the person said: ${choice}` }
   }).catch(($, e, next) => next(e))
 
+  // Where the pane's focus is, so the row holding it can read whole.
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    if (!('deny' in moved && moved.deny)) await update($, focused, () => e.element ?? '')
+    return moved
+  }).catch(($, e, next) => next(e))
+
   // Notes the id each of the person's messages is drawn under, for the chapters; draws nothing.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin?.kind === 'composer' && e.requestId) {
@@ -730,6 +738,7 @@ export const register: Register = on => {
     if (e.surface === 'mobile') return next(e)
     const { Box, Text, Button, Input } = $.ui.resolve(e)
     const shown = await read($, tab)
+    const focusedKey = await read($, focused)
     const live = await read($, sessions)
     const now = await $.clock.now()
     const width = e.props.bodyColumns ?? 80
@@ -763,12 +772,18 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {tabs}
           {list.length === 0 && <Text dimColor>{t('noMessages')}</Text>}
-          {list.map(ch => (
-            <Box key={'chapter-' + ch.uuid} flexDirection="row">
-              <Text dimColor>{(ch.at ? clock(ch.at) : '     ') + '  '}</Text>
-              <Button key={'ch-' + ch.uuid} label={fit(ch.text, Math.max(10, width - 9))} plain onPress={() => goTo($, ch)} />
-            </Box>
-          ))}
+          {list.map(ch => {
+            // The row with the focus reads whole, its time included.
+            const isFocused = focusedKey === 'ch-' + ch.uuid
+            return (
+              <Box key={'chapter-' + ch.uuid} flexDirection="row">
+                <Text inverse={isFocused} dimColor={!isFocused}>
+                  {(ch.at ? clock(ch.at) : '     ') + '  '}
+                </Text>
+                <Button key={'ch-' + ch.uuid} label={fit(ch.text, Math.max(10, width - 9))} plain onPress={() => goTo($, ch)} />
+              </Box>
+            )
+          })}
         </Box>
       )
     }
@@ -881,30 +896,44 @@ export const register: Register = on => {
     const folderW = Math.min(36, Math.max(12, Math.floor(width * 0.35)))
     const titleW = Math.max(10, width - folderW - timeW - 6)
 
-    // The tab row and the field take two rows; each day takes one more for its heading.
+    // The tab row and the field take two rows; each day takes two more, a blank line and its heading.
     let room = rows - 2
     const lines: RenderNode[] = []
+    let firstRow: string | undefined
     for (const group of byDay(search(past, q), now)) {
-      if (room < 2) break
-      lines.push(<Text key={'day-' + group.day} dimColor bold>{group.day}</Text>)
-      room -= 1
+      if (room < 3) break
+      lines.push(
+        <Box key={'day-' + group.day} marginTop={1}>
+          <Text bold color="suggestion">
+            {group.day}
+          </Text>
+        </Box>,
+      )
+      room -= 2
       for (const s of group.sessions) {
         if (room < 1) break
         room -= 1
         const label = fit(s.title, titleW) + '  '
         const tail = fitStart(shortPath(s.cwd, home), folderW) + '  ' + clock(s.lastAt)
-        lines.push(
-          openIds.has(s.sessionId) ? (
+        if (openIds.has(s.sessionId)) {
+          lines.push(
             <Text key={s.sessionId} dimColor>
               {'● ' + label + tail}
+            </Text>,
+          )
+          continue
+        }
+        firstRow ??= s.sessionId
+        // The row with the focus reads whole, its folder and time included.
+        const isFocused = focusedKey === s.sessionId
+        lines.push(
+          <Box key={'row-' + s.sessionId} flexDirection="row">
+            <Text inverse={isFocused}>{'  '}</Text>
+            <Button key={s.sessionId} label={label} plain onPress={() => resume($, s)} />
+            <Text inverse={isFocused} dimColor={!isFocused}>
+              {tail}
             </Text>
-          ) : (
-            <Box key={'row-' + s.sessionId} flexDirection="row">
-              <Text>{'  '}</Text>
-              <Button key={s.sessionId} label={label} plain onPress={() => resume($, s)} />
-              <Text dimColor>{tail}</Text>
-            </Box>
-          ),
+          </Box>,
         )
       }
     }
@@ -918,8 +947,13 @@ export const register: Register = on => {
           placeholder={t('searchPlaceholder')}
           value={q}
           autoFocus
+          submitLabel={t('go')}
           onInput={(value: string) => void update($, query, () => value)}
-          onSubmit={(value: string) => void update($, query, () => value)}
+          onSubmit={async (value: string) => {
+            await update($, query, () => value)
+            // Enter takes the keyboard to the first result.
+            if (firstRow) await $.ui.focus({ requestId: PANE, key: firstRow }).catch(() => {})
+          }}
         />
         {isFirstScan && past.length === 0 && <Text dimColor>…</Text>}
         {lines}

@@ -75,8 +75,8 @@ describe('finding and grouping', () => {
   test('newest first, one heading per day', () => {
     setLang('it')
     const groups = byDay(list, NOW)
-    expect(groups.map(g => g.day)).toEqual(['oggi', 'ieri'])
-    expect(dayLabel(new Date(2026, 9, 5, 9).getTime(), NOW)).toBe('lun 5 ott')
+    expect(groups.map(g => g.day)).toEqual(['Oggi', 'Ieri'])
+    expect(dayLabel(new Date(2026, 9, 5, 9).getTime(), NOW)).toBe('Lun 5 ott')
   })
 
   test('long path lists split under the command-line limit', () => {

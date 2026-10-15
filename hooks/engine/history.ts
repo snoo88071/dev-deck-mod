@@ -81,13 +81,13 @@ function dayOf(at: number): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
-/** A day's heading in the mod's language: `today`, `yesterday`, or `Mon 12 Oct` (`lun 12 ott`). */
+/** A day's heading in the mod's language, in sentence case as Dev Deck writes it: `Today`, `Yesterday`, `Mon 12 Oct` (`Lun 12 ott`). */
 export function dayLabel(at: number, now: number): string {
   const days = Math.round((dayOf(now) - dayOf(at)) / 86_400_000)
-  if (days === 0) return t('today')
-  if (days === 1) return t('yesterday')
   const d = new Date(at)
-  return t('weekdays').split(' ')[d.getDay()] + ' ' + d.getDate() + ' ' + t('months').split(' ')[d.getMonth()]
+  const text =
+    days === 0 ? t('today') : days === 1 ? t('yesterday') : t('weekdays').split(' ')[d.getDay()] + ' ' + d.getDate() + ' ' + t('months').split(' ')[d.getMonth()]
+  return text.charAt(0).toLocaleUpperCase() + text.slice(1)
 }
 
 /** `14:02`. */
