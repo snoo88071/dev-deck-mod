@@ -3,11 +3,11 @@ import type { EngineInterface, Register, RenderNode, Timer } from 'claude-code'
 
 import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
 import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, search } from './engine/history'
-import { bytes, contextPercent, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
+import { bytes, contextPercent, findOrphans, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
 import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
 import { parseChapters, scrollId, textKey } from './engine/chapters'
-import type { Chapter, DeckTab, LiveSession, PastSession, SessionLoad } from '../types'
+import type { Branch, Chapter, DeckTab, LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
 /** The session files are read this often while the pane is open: a read is a few small files. */
@@ -28,6 +28,7 @@ const loads = atom({ plugin: 'dev-deck-mod', key: 'loads' } as const, {})
 const armed = atom({ plugin: 'dev-deck-mod', key: 'armed' } as const, 0)
 const chapters = atom({ plugin: 'dev-deck-mod', key: 'chapters' } as const, [])
 const band = atom({ plugin: 'dev-deck-mod', key: 'band' } as const, { servers: [], ram: 0 })
+const orphans = atom({ plugin: 'dev-deck-mod', key: 'orphans' } as const, [])
 
 /** After a command, the band waits this long before reading: a server takes a moment to listen. */
 const OWN_DELAY_MS = 3_000
@@ -140,6 +141,8 @@ async function readLoads($: EngineInterface, live: LiveSession[]): Promise<Recor
   }
   const own = await ownContext($)
   const tree = treeOf(procs)
+  const leftover = findOrphans(tree, ports)
+  await update($, orphans, () => leftover)
   const result: Record<string, SessionLoad> = {}
   for (const s of live) {
     const load: SessionLoad = sessionLoad(s.pid, tree, ports)
@@ -620,6 +623,28 @@ export const register: Register = on => {
       const stopW = 11
       const portsW = 14
       const labelW = Math.max(10, width - 4 - portsW - ramW - stopW - 3)
+      const left = await read($, orphans)
+      // One thing a session started, or left behind: name, ports, memory, Stop.
+      const branchRow = (b: Branch) => (
+        <Box key={'branch-' + b.pid} flexDirection="row" columnGap={1}>
+          <Text>{'   '}</Text>
+          <Box width={labelW}>
+            <Text wrap="truncate-end">{b.label}</Text>
+          </Box>
+          <Box width={portsW}>
+            <Text color="success">{b.ports.map(p => ':' + p).join(' ')}</Text>
+          </Box>
+          <Box width={ramW}>
+            <Text dimColor>{bytes(b.ram)}</Text>
+          </Box>
+          <Button
+            key={'stop-' + b.pid}
+            label={armedPid === b.pid ? 'Sicuro?' : 'Stop'}
+            variant={armedPid === b.pid ? 'primary' : undefined}
+            onPress={() => void pressStop($, b.pid)}
+          />
+        </Box>
+      )
       return (
         <Box flexDirection="column">
           {tabs}
@@ -657,29 +682,18 @@ export const register: Register = on => {
                     <Text>{load ? bytes(load.ram) : ''}</Text>
                   </Box>
                 </Box>
-                {(load?.branches ?? []).map(b => (
-                  <Box key={'branch-' + b.pid} flexDirection="row" columnGap={1}>
-                    <Text>{'   '}</Text>
-                    <Box width={labelW}>
-                      <Text wrap="truncate-end">{b.label}</Text>
-                    </Box>
-                    <Box width={portsW}>
-                      <Text color="success">{b.ports.map(p => ':' + p).join(' ')}</Text>
-                    </Box>
-                    <Box width={ramW}>
-                      <Text dimColor>{bytes(b.ram)}</Text>
-                    </Box>
-                    <Button
-                      key={'stop-' + b.pid}
-                      label={armedPid === b.pid ? 'Sicuro?' : 'Stop'}
-                      variant={armedPid === b.pid ? 'primary' : undefined}
-                      onPress={() => void pressStop($, b.pid)}
-                    />
-                  </Box>
-                ))}
+                {(load?.branches ?? []).map(branchRow)}
               </Box>
             )
           })}
+          {left.length > 0 && (
+            <Box key="orphans" flexDirection="column">
+              <Text dimColor bold>
+                Orfani
+              </Text>
+              {left.map(branchRow)}
+            </Box>
+          )}
         </Box>
       )
     }

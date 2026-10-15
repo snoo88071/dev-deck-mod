@@ -85,6 +85,8 @@ declare module 'claude-code' {
       /** This session's messages, oldest first. */
       chapters: Chapter[]
       band: BandState
+      /** What sessions left running when they went away. */
+      orphans: Branch[]
     }
   }
 }

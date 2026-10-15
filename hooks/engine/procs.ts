@@ -126,6 +126,31 @@ export function sessionLoad(pid: number, tree: Tree, ports: Map<number, number[]
   return { ram, branches }
 }
 
+/** The runtimes a dev server or an MCP server runs in. */
+const RUNTIMES = /^(?:node|python\d*|pythonw|bun|deno|uv|uvx)\.exe$/i
+/** What a command line carries when Claude Code started it: npx's cache, its plugins, its shell. */
+const CLAUDE_MARK = /npm-cache[\\/]+_npx|[\\/]\.claude[\\/]|shell-snapshots|claude-code/i
+
+/**
+ * What a Claude Code session left behind: a runtime whose parent is gone (or whose parent's pid now
+ * belongs to a younger process), that Claude Code started or that listens on a port. Windows has
+ * plenty of other processes whose parent exited (explorer.exe among them): those aren't these.
+ */
+export function findOrphans(tree: Tree, ports: Map<number, number[]>): Branch[] {
+  const out: Branch[] = []
+  for (const p of tree.byPid.values()) {
+    if (!RUNTIMES.test(p.name)) continue
+    const parent = tree.byPid.get(p.ppid)
+    const reused = parent !== undefined && (parent.started ?? 0) > 0 && (p.started ?? 0) > 0 && parent.started! > p.started!
+    if (parent && !reused) continue
+    const procs = subtree(p.pid, tree.children, tree.byPid)
+    const open = [...new Set(procs.flatMap(x => ports.get(x.pid) ?? []))].sort((a, b) => a - b)
+    if (open.length === 0 && !procs.some(x => CLAUDE_MARK.test(x.cmd))) continue
+    out.push({ pid: p.pid, label: labelOf(procs), ports: open, ram: procs.reduce((s, x) => s + x.ram, 0), started: p.started ?? 0 })
+  }
+  return out.sort((a, b) => (b.ports.length > 0 ? 1 : 0) - (a.ports.length > 0 ? 1 : 0) || b.ram - a.ram)
+}
+
 /** The tokens of a transcript's last answer, and its model: the context the session holds now. */
 export function lastUsage(text: string): { tokens: number; model: string } | undefined {
   const lines = text.split('\n')
