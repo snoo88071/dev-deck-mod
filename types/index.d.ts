@@ -48,7 +48,15 @@ export type PastSession = {
 }
 
 /** The pane's tabs. */
-export type DeckTab = 'open' | 'history'
+export type DeckTab = 'open' | 'history' | 'chapters'
+
+/** A message the person typed in this session: a place to go back to. */
+export type Chapter = {
+  /** The transcript line's id. */
+  uuid: string
+  at: number
+  text: string
+}
 
 declare module 'claude-code' {
   interface PluginState {
@@ -63,6 +71,8 @@ declare module 'claude-code' {
       query: string
       /** True while the history is being read for the first time. */
       isScanning: boolean
+      /** This session's messages, oldest first. */
+      chapters: Chapter[]
     }
   }
 }

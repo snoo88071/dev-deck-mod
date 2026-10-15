@@ -6,7 +6,8 @@ import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, searc
 import { bytes, contextPercent, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
 import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
-import type { LiveSession, PastSession, SessionLoad } from '../types'
+import { parseChapters, scrollId, textKey } from './engine/chapters'
+import type { Chapter, DeckTab, LiveSession, PastSession, SessionLoad } from '../types'
 
 const PANE = 'deck'
 /** The session files are read this often while the pane is open: a read is a few small files. */
@@ -25,6 +26,7 @@ const query = atom({ plugin: 'dev-deck-mod', key: 'query' } as const, '')
 const isScanning = atom({ plugin: 'dev-deck-mod', key: 'isScanning' } as const, false)
 const loads = atom({ plugin: 'dev-deck-mod', key: 'loads' } as const, {})
 const armed = atom({ plugin: 'dev-deck-mod', key: 'armed' } as const, 0)
+const chapters = atom({ plugin: 'dev-deck-mod', key: 'chapters' } as const, [])
 
 /**
  * One transcript as the index last saw it: its size, its last write, and what it held,
@@ -45,6 +47,10 @@ let lastStatus = new Map<string, string>()
 const titles = new Map<string, { title: string | undefined; status: string; at: number }>()
 /** A title is read again this often even when nothing changed. */
 const TITLE_MS = 60_000
+/** The ids Claude Code drew the person's messages under, by the start of their text. */
+const drawnIds = new Map<string, string>()
+/** The transcript's last write when the chapters were read. */
+let chaptersMtime = 0
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
 
@@ -161,6 +167,7 @@ async function refresh($: EngineInterface): Promise<void> {
   }
   lastStatus = new Map(open.map(s => [s.sessionId, s.status]))
   await update($, sessions, () => open)
+  if ((await read($, tab)) === 'chapters') await readChapters($)
   // The ages move even when the list doesn't.
   $.ui.invalidate('ui.render')
 }
@@ -298,6 +305,48 @@ function rescan($: EngineInterface): Promise<void> {
   return scanning
 }
 
+/** Reads this session's messages again, when its transcript changed since the last read. */
+async function readChapters($: EngineInterface): Promise<void> {
+  if (!me) me = await $.session.id()
+  const cwd = (await read($, sessions)).find(s => s.sessionId === me)?.cwd ?? (await $.session.cwd())
+  const path = (await configDir($)) + '\\projects\\' + projectFolder(cwd) + '\\' + me + '.jsonl'
+  let mtime: number
+  try {
+    mtime = (await $.fs.stat(path)).mtimeMs
+  } catch {
+    return // No transcript before the first message.
+  }
+  if (mtime === chaptersMtime) return
+  try {
+    const r = await $.process.run(['findstr', '/c:"role":"user","content":"', path], { timeoutMs: 15_000 })
+    await update($, chapters, () => parseChapters(r.stdout))
+    chaptersMtime = mtime
+  } catch {
+    // Read again at the next refresh.
+  }
+}
+
+/** Shows the chapters, from the newest: the pane's window goes to its end. */
+async function openChapters($: EngineInterface): Promise<void> {
+  await readChapters($)
+  try {
+    await $.ui.scroll({ in: PANE, to: 'end' })
+  } catch {
+    // The pane opens at its top instead.
+  }
+}
+
+/** Brings a message back into view at the top of the conversation. */
+async function goTo($: EngineInterface, chapter: Chapter): Promise<void> {
+  let moved = false
+  try {
+    moved = !(await $.ui.scroll({ to: { requestId: scrollId(chapter, drawnIds) }, block: 'start' })).deny
+  } catch {
+    // No row by that id on this surface.
+  }
+  if (!moved) $.ui.toast('Questo messaggio non è più nella conversazione')
+}
+
 /** Opens a Windows Terminal tab in the session's folder, resuming it. */
 async function resume($: EngineInterface, s: PastSession): Promise<void> {
   if (!(await $.fs.exists(s.cwd))) {
@@ -414,6 +463,15 @@ export const register: Register = on => {
     return { deny: `A dev server is already running (${found.label}, ${where}). Before starting another, the person said: ${choice}` }
   }).catch(($, e, next) => next(e))
 
+  // Notes the id each of the person's messages is drawn under, for the chapters; draws nothing.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (e.props.origin?.kind === 'composer' && e.requestId) {
+      drawnIds.set(textKey(e.props.text), e.requestId)
+      if (drawnIds.size > 2_000) drawnIds.delete(drawnIds.keys().next().value!)
+    }
+    return next(e)
+  })
+
   // Never keeps a pane open: whatever happens here, the close goes on.
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE) stop()
@@ -430,16 +488,17 @@ export const register: Register = on => {
     const width = e.props.bodyColumns ?? 80
     const rows = Math.max(4, e.props.scroll?.bodyRows ?? 12)
 
-    const tabButton = (name: 'open' | 'history', label: string, hotkey: string) => (
+    const tabButton = (name: DeckTab, label: string, hotkey: string) => (
       <Button
         key={'tab-' + name}
         label={label}
         hotkey={hotkey}
         plain
         dimColor={shown !== name}
-        onPress={() => {
-          void update($, tab, () => name)
+        onPress={async () => {
+          await update($, tab, () => name)
           if (name === 'history') void rescan($)
+          if (name === 'chapters') await openChapters($)
         }}
       />
     )
@@ -447,8 +506,25 @@ export const register: Register = on => {
       <Box flexDirection="row" columnGap={3}>
         {tabButton('open', 'Aperte', '1')}
         {tabButton('history', 'Storico', '2')}
+        {tabButton('chapters', 'Capitoli', '3')}
       </Box>
     )
+
+    if (shown === 'chapters') {
+      const list = await read($, chapters)
+      return (
+        <Box flexDirection="column">
+          {tabs}
+          {list.length === 0 && <Text dimColor>Nessun messaggio</Text>}
+          {list.map(ch => (
+            <Box key={'chapter-' + ch.uuid} flexDirection="row">
+              <Text dimColor>{(ch.at ? clock(ch.at) : '     ') + '  '}</Text>
+              <Button key={'ch-' + ch.uuid} label={fit(ch.text, Math.max(10, width - 9))} plain onPress={() => void goTo($, ch)} />
+            </Box>
+          ))}
+        </Box>
+      )
+    }
 
     if (shown === 'open') {
       const held = await read($, loads)

@@ -11,7 +11,7 @@ const PROMPTS_KEPT = 40
 const PROMPT_CHARS = 200
 
 /** A prompt the person typed: plain text, not a command's expansion or a tool's result. */
-function typedPrompt(line: Record<string, unknown>): string | undefined {
+export function typedPrompt(line: Record<string, unknown>): string | undefined {
   if (line.type !== 'user' || line.isMeta === true) return undefined
   const content = (line.message as { content?: unknown } | undefined)?.content
   if (typeof content !== 'string') return undefined
