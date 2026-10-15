@@ -32,11 +32,44 @@ export function parseSession(text: string): LiveSession | undefined {
 /** How long a session that stopped reads «finito» before it reads «ferma». */
 export const DONE_MS = 10 * 60_000
 
-/** The state a row shows: at work, just finished (for a while after it stopped), or idle. */
-export function shownState(s: Pick<LiveSession, 'status' | 'statusSince'>, now: number): 'busy' | 'done' | 'idle' | string {
+/**
+ * A status set this soon after the session started may be its start (Claude Code takes a while to
+ * come up), not the end of an answer.
+ */
+const START_MS = 60_000
+
+/**
+ * The state a row shows: at work, just finished (for a while after it stopped), or idle. Finished is
+ * certain when the pane saw it stop (`stoppedAt`); before the pane opened, the file's own time says
+ * it, once it's clear of the session's start.
+ */
+export function shownState(
+  s: Pick<LiveSession, 'status' | 'statusSince' | 'startedAt'>,
+  now: number,
+  stoppedAt?: number,
+): 'busy' | 'done' | 'idle' | string {
   if (s.status === 'busy') return 'busy'
-  if (s.status === 'idle') return s.statusSince > 0 && now - s.statusSince < DONE_MS ? 'done' : 'idle'
-  return s.status
+  if (s.status !== 'idle') return s.status
+  if (stoppedAt !== undefined) return now - stoppedAt < DONE_MS ? 'done' : 'idle'
+  const answered = s.statusSince > 0 && s.statusSince - s.startedAt > START_MS
+  return answered && now - s.statusSince < DONE_MS ? 'done' : 'idle'
+}
+
+/**
+ * The state a row shows, from the best source there is. A session running the mod says itself when
+ * an answer ended (`presence`, written at the end of each answer): a slash command flipping the file
+ * to busy and back isn't an answer. For one without the mod, the file is all there is.
+ */
+export function rowState(
+  s: Pick<LiveSession, 'status' | 'statusSince' | 'startedAt'>,
+  now: number,
+  source: { hasMod: boolean; presence?: { state: string; at: number }; stoppedAt?: number },
+): 'busy' | 'done' | 'idle' | string {
+  if (!source.hasMod) return shownState(s, now, source.stoppedAt)
+  if (s.status === 'busy') return 'busy'
+  if (s.status !== 'idle') return s.status
+  const p = source.presence
+  return p?.state === 'done' && now - p.at < DONE_MS ? 'done' : 'idle'
 }
 
 /** The sessions that were at work at the last read and have stopped since. */

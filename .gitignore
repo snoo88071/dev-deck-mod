@@ -2,3 +2,5 @@
 node_modules/
 # Working plans: the author's own notes, not part of the mod.
 .claude/plans/
+# The test take shows the author's real sessions: never committed.
+demo/test.gif

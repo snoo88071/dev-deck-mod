@@ -5,7 +5,7 @@ import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
 import { batches, byDay, clock, parseFindstr, parseTranscript, resumeAttempts, search } from './engine/history'
 import { bytes, contextPercent, findOrphans, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
-import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
+import { justFinished, lastTitle, parseSession, rowState, sortSessions } from './engine/sessions'
 import { parseChapters, scrollId, textKey } from './engine/chapters'
 import { regLanguage, resolveLang, setLang, t } from './engine/i18n'
 import { INPUT, PRESENCE, alertsFor } from './engine/alerts'
@@ -58,6 +58,10 @@ let procsAt = 0
 let scanning: Promise<void> | undefined
 /** Each open session's status at the last read: a change from busy to idle is «finished». */
 let lastStatus = new Map<string, string>()
+/** When the pane saw each session stop: «finished» without guessing from the file. */
+const stoppedAt = new Map<string, number>()
+/** What each session running the mod last said about itself, from the shared store. */
+let lastPresences: Record<string, Presence> = {}
 /** Titles read from the transcripts, with the status they were read at: a new answer may retitle. */
 const titles = new Map<string, { title: string | undefined; status: string; at: number }>()
 /** A title is read again this often even when nothing changed. */
@@ -141,6 +145,7 @@ async function readAlerts($: EngineInterface): Promise<void> {
       else inputs[id] = at
     }
   }
+  lastPresences = presences
   const { show, alerts: list } = alertsFor(me, presences, inputs, ids)
   await update($, alerts, () => (show ? list : []))
 }
@@ -281,8 +286,10 @@ async function refresh($: EngineInterface): Promise<void> {
   const alivenow = alive ? found.filter(s => alive!.has(s.pid) || s.sessionId === me) : found
   const open = await withTitles($, alivenow, now)
   for (const s of justFinished(lastStatus, open)) {
+    stoppedAt.set(s.sessionId, now)
     if (s.sessionId !== me) $.ui.toast(t('finished', { name: s.title ?? s.name }))
   }
+  for (const s of open) if (s.status === 'busy') stoppedAt.delete(s.sessionId)
   lastStatus = new Map(open.map(s => [s.sessionId, s.status]))
   await update($, sessions, () => open)
   if ((await read($, tab)) === 'chapters') await readChapters($)
@@ -837,7 +844,8 @@ export const register: Register = on => {
             </Box>
           )}
           {live.map(s => {
-            const state = shownState(s, now)
+            const presence = lastPresences[s.sessionId]
+            const state = rowState(s, now, { hasMod: s.sessionId === me || presence !== undefined, presence, stoppedAt: stoppedAt.get(s.sessionId) })
             const isBusy = state === 'busy'
             const isDone = state === 'done'
             const isMe = s.sessionId === me

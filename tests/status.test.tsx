@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { DONE_MS, justFinished, lastTitle, shownState } from '../hooks/engine/sessions'
+import { DONE_MS, justFinished, lastTitle, rowState, shownState } from '../hooks/engine/sessions'
 import type { LiveSession } from '../types'
 
 const NOW = 1_800_000_000_000
@@ -18,9 +18,28 @@ const live = (id: string, status: string, statusSince = NOW): LiveSession => ({
 describe('the state a row shows', () => {
   test('at work, finished for ten minutes after it stops, then idle', () => {
     expect(shownState(live('a', 'busy'), NOW)).toBe('busy')
-    expect(shownState(live('a', 'idle', NOW - 60_000), NOW)).toBe('done')
+    expect(shownState({ ...live('a', 'idle', NOW - 60_000), startedAt: NOW - 3_600_000 }, NOW)).toBe('done')
     expect(shownState(live('a', 'idle', NOW - DONE_MS), NOW)).toBe('idle')
     expect(shownState(live('a', 'idle', 0), NOW)).toBe('idle')
+  })
+
+  test('a session just opened is idle, not finished: its status was set by its start', () => {
+    // Claude Code can take a while to come up: still its start.
+    const opened = { ...live('a', 'idle', NOW - 30_000), startedAt: NOW - 50_000 }
+    expect(shownState(opened, NOW)).toBe('idle')
+    // Seen stopping by the pane: finished, however soon after the start.
+    expect(shownState(opened, NOW, NOW - 5_000)).toBe('done')
+    expect(shownState(opened, NOW, NOW - DONE_MS)).toBe('idle')
+  })
+
+  test('with the mod, finished is what the session said at the end of an answer, not a slash command', () => {
+    const s = { ...live('a', 'idle', NOW - 1_000), startedAt: NOW - 5_000 }
+    // /deck flipped the file busy and back: the pane saw it stop, but no answer ended.
+    expect(rowState(s, NOW, { hasMod: true, stoppedAt: NOW - 1_000 })).toBe('idle')
+    expect(rowState(s, NOW, { hasMod: true, presence: { state: 'done', at: NOW - 2_000 } })).toBe('done')
+    expect(rowState(s, NOW, { hasMod: true, presence: { state: 'done', at: NOW - DONE_MS } })).toBe('idle')
+    // Without the mod, the file is all there is.
+    expect(rowState(s, NOW, { hasMod: false, stoppedAt: NOW - 1_000 })).toBe('done')
   })
 
   test('finished means busy at the last read, idle now', () => {
