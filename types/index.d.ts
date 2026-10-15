@@ -47,6 +47,15 @@ export type PastSession = {
   lastAt: number
 }
 
+/** What the band above the prompt says about this session. */
+export type BandState = {
+  /** The servers it keeps on: its branches listening on a port. */
+  servers: { label: string; ports: number[] }[]
+  /** Bytes in memory, the session and everything under it. */
+  ram: number
+  context?: number
+}
+
 /** The pane's tabs. */
 export type DeckTab = 'open' | 'history' | 'chapters'
 
@@ -73,6 +82,7 @@ declare module 'claude-code' {
       isScanning: boolean
       /** This session's messages, oldest first. */
       chapters: Chapter[]
+      band: BandState
     }
   }
 }

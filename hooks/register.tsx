@@ -27,6 +27,10 @@ const isScanning = atom({ plugin: 'dev-deck-mod', key: 'isScanning' } as const, 
 const loads = atom({ plugin: 'dev-deck-mod', key: 'loads' } as const, {})
 const armed = atom({ plugin: 'dev-deck-mod', key: 'armed' } as const, 0)
 const chapters = atom({ plugin: 'dev-deck-mod', key: 'chapters' } as const, [])
+const band = atom({ plugin: 'dev-deck-mod', key: 'band' } as const, { servers: [], ram: 0 })
+
+/** After a command, the band waits this long before reading: a server takes a moment to listen. */
+const OWN_DELAY_MS = 3_000
 
 /**
  * One transcript as the index last saw it: its size, its last write, and what it held,
@@ -51,6 +55,8 @@ const TITLE_MS = 60_000
 const drawnIds = new Map<string, string>()
 /** The transcript's last write when the chapters were read. */
 let chaptersMtime = 0
+/** The band's next read, pending: a later ask moves it, so reads close together are one. */
+let ownTimer: Timer | undefined
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
 
@@ -305,6 +311,25 @@ function rescan($: EngineInterface): Promise<void> {
   return scanning
 }
 
+/** Asks for the band to read this session again in a few seconds; asks close together are one. */
+function scheduleOwnRead($: EngineInterface): void {
+  ownTimer?.cancel()
+  ownTimer = $.clock.after(OWN_DELAY_MS, () => void readOwn($))
+}
+
+/** What this session keeps on, for the band: its servers, its memory, its context. */
+async function readOwn($: EngineInterface): Promise<void> {
+  if (!me) me = await $.session.id()
+  const mine = (await readSessions($, await configDir($))).find(s => s.sessionId === me)
+  if (!mine) return
+  const snap = await readTree($)
+  if (!snap) return
+  const load = sessionLoad(mine.pid, snap.tree, snap.ports)
+  const own = await ownContext($)
+  const servers = load.branches.filter(b => b.ports.length > 0).map(b => ({ label: b.label, ports: b.ports }))
+  await update($, band, () => ({ servers, ram: load.ram, ...(own ? { context: own.percent } : {}) }))
+}
+
 /** Reads this session's messages again, when its transcript changed since the last read. */
 async function readChapters($: EngineInterface): Promise<void> {
   if (!me) me = await $.session.id()
@@ -369,9 +394,10 @@ async function stopBranch($: EngineInterface, pid: number): Promise<void> {
   }
   procsAt = 0
   await refresh($)
+  scheduleOwnRead($)
 }
 
-/** Every process and the ports they listen on, for the guard: no transcripts read. */
+/** Every process and the ports they listen on, for the guard and the band: no transcripts read. */
 async function readTree($: EngineInterface) {
   try {
     const r = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', loadScript([])], { timeoutMs: 20_000 })
@@ -423,10 +449,39 @@ export const register: Register = on => {
     return {}
   })
 
+  // After a shell command the processes may have changed: the band reads again shortly.
+  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+    const ran = await next(e)
+    scheduleOwnRead($)
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // And at the end of each answer, for what changed some other way.
+  on('turn.complete', async ($, e, next) => {
+    scheduleOwnRead($)
+    return next(e)
+  })
+
+  // What this session keeps on, above the prompt; nothing when no server is up.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.surface === 'mobile') return next(e)
+    const state = await read($, band)
+    if (state.servers.length === 0) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const servers = state.servers.map(s => s.label + ' ' + s.ports.map(p => ':' + p).join(' ')).join(' · ')
+    const rest = ' · ' + bytes(state.ram) + (state.context !== undefined ? ' · ctx ' + state.context + '%' : '')
+    return (
+      <Box flexDirection="row">
+        <Text color="success" wrap="truncate-end">
+          {servers}
+        </Text>
+        <Text dimColor>{rest}</Text>
+      </Box>
+    )
+  })
+
   // A second dev server for the same project, or on a port already taken: ask first.
-  on('tool.call', async ($, e, next) => {
-    const tool = String(e.tool)
-    if (tool !== 'Bash' && tool !== 'PowerShell') return next(e)
+  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const command = (e as { command?: unknown }).command
     if (typeof command !== 'string') return next(e)
     const start = serverStart(command)
