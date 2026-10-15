@@ -135,3 +135,12 @@ export function batches(paths: readonly string[], max = 24_000): string[][] {
 export function resumeArgv(cwd: string, sessionId: string): string[] {
   return ['wt', '-w', '0', 'nt', '-d', cwd, 'claude', '--resume', sessionId]
 }
+
+/**
+ * The ways to resume, tried in order: Windows Terminal directly; through `start`, which finds
+ * it the way the shell does; a plain console window in the folder, as Dev Deck falls back to.
+ */
+export function resumeAttempts(cwd: string, sessionId: string): string[][] {
+  const wt = resumeArgv(cwd, sessionId)
+  return [wt, ['cmd', '/c', 'start', '', ...wt], ['cmd', '/c', 'start', '', '/d', cwd, 'cmd', '/k', 'claude', '--resume', sessionId]]
+}

@@ -148,3 +148,69 @@ test('History: search, then Enter on a row resumes it in a new tab', async ($, o
   await ui.press({ key: 'aaa' })
   expect(launched).toEqual([['wt', '-w', '0', 'nt', '-d', 'C:\\Users\\me\\Desktop\\shop', 'claude', '--resume', 'aaa']])
 })
+
+test('resume falls back when Windows Terminal fails, and says why when nothing opens', async ($, on) => {
+  mock.env(on, { DEVDECK_LANG: 'it', USERPROFILE: 'C:\\Users\\me' })
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  const root = 'C:\\Users\\me\\.claude\\projects'
+  const shop = root + '\\C--shop\\aaa.jsonl'
+  const tried: string[][] = []
+  const toasts: string[] = []
+  let opens = 1
+
+  on('session.id', async () => ({ value: 'me' }))
+  on('ui.open', async () => ({ value: { isPlaced: true } }))
+  on('ui.panes', async () => ({ value: [] }))
+  on('ui.toast', async ($, e) => {
+    toasts.push(String((e as { text?: unknown }).text))
+    return { value: undefined } as never
+  })
+  on('fs.exists', async () => ({ value: true }))
+  on('fs.read', async () => ({ value: '' }))
+  on('fs.list', async ($, e) => {
+    const entry = (name: string, kind: 'file' | 'dir') => ({ name, kind, size: 10, mtimeMs: NOW - HOUR, isLink: false })
+    if (e.path === root) return { value: [entry('C--shop', 'dir')] }
+    if (e.path === root + '\\C--shop') return { value: [entry('aaa.jsonl', 'file')] }
+    return { value: [] }
+  })
+  on('process.run', async ($, e) => {
+    const out = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: exitCode ? 'no' : '', isStdoutTruncated: false, isStderrTruncated: false } })
+    const [cmd, ...args] = e.argv
+    if (cmd === 'findstr' && args[0] === '/m') return out(shop)
+    if (cmd === 'findstr') return out(prompt('fix the cart total'))
+    if (cmd === 'wt' || (cmd === 'cmd' && args.includes('wt')) || (cmd === 'cmd' && args.includes('/k'))) {
+      tried.push([...e.argv])
+      if (tried.length > opens) return out('', 0)
+      if (cmd === 'wt') throw new Error('spawn wt ENOENT')
+      return out('', 1)
+    }
+    return out('')
+  })
+
+  await $.command.run({ command: 'deck', args: '' } as never)
+  const ui = await $.ui.mount({
+    plugin: 'dev-deck-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'deck',
+    props: { title: 'Dev Deck', isFocused: true, bodyColumns: 100, placement: 'inline', scroll: { offset: 0, bodyRows: 20 } } as never,
+  })
+  await ui.press({ key: 'tab-history' })
+
+  // wt can't start: the same command goes through `start`.
+  await ui.press({ key: 'aaa' })
+  expect(tried.map(a => a.slice(0, 4))).toEqual([
+    ['wt', '-w', '0', 'nt'],
+    ['cmd', '/c', 'start', ''],
+  ])
+  expect(toasts).toEqual([])
+
+  // Nothing opens: the toast says why.
+  tried.length = 0
+  opens = 99
+  await ui.press({ key: 'aaa' })
+  expect(tried).toHaveLength(3)
+  expect(toasts[0]).toContain('Windows Terminal non si è aperto')
+  expect(toasts[0]).toContain('cmd exit 1')
+})

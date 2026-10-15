@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderNode, Timer } from 'claude-code'
 
 import { fit, fitStart, shortPath, since, statusLabel } from './engine/format'
-import { batches, byDay, clock, parseFindstr, parseTranscript, resumeArgv, search } from './engine/history'
+import { batches, byDay, clock, parseFindstr, parseTranscript, resumeAttempts, search } from './engine/history'
 import { bytes, contextPercent, findOrphans, lastUsage, parseNetstat, parseProcs, projectFolder, sessionLoad, treeOf } from './engine/procs'
 import { commandFolder, reuseNote, runningServer, serverStart } from './engine/guard'
 import { justFinished, lastTitle, parseSession, shownState, sortSessions } from './engine/sessions'
@@ -418,17 +418,24 @@ async function goTo($: EngineInterface, chapter: Chapter): Promise<void> {
   if (!moved) $.ui.toast(t('goneMessage'))
 }
 
-/** Opens a Windows Terminal tab in the session's folder, resuming it. */
+/** Opens a terminal in the session's folder resuming it: Windows Terminal, else a console window. */
 async function resume($: EngineInterface, s: PastSession): Promise<void> {
   if (!(await $.fs.exists(s.cwd))) {
     $.ui.toast(t('noFolder', { path: s.cwd }))
     return
   }
-  try {
-    await $.process.run(resumeArgv(s.cwd, s.sessionId), { timeoutMs: 15_000 })
-  } catch {
-    $.ui.toast(t('noTerminal'))
+  let why = ''
+  for (const argv of resumeAttempts(s.cwd, s.sessionId)) {
+    try {
+      const r = await $.process.run(argv, { timeoutMs: 15_000 })
+      if (r.exitCode === 0) return
+      why = argv[0] + ' exit ' + r.exitCode + (r.stderr.trim() ? ': ' + r.stderr.trim() : '')
+    } catch (err) {
+      why = argv[0] + ': ' + (err instanceof Error ? err.message : String(err))
+    }
+    $.ui.log('resume: ' + why, { to: 'debug' })
   }
+  $.ui.toast(t('noTerminal') + ' (' + why.slice(0, 160) + ')')
 }
 
 /** Closes a branch and its whole tree, then reads the processes again so the row goes. */
@@ -632,7 +639,7 @@ export const register: Register = on => {
           {list.map(ch => (
             <Box key={'chapter-' + ch.uuid} flexDirection="row">
               <Text dimColor>{(ch.at ? clock(ch.at) : '     ') + '  '}</Text>
-              <Button key={'ch-' + ch.uuid} label={fit(ch.text, Math.max(10, width - 9))} plain onPress={() => void goTo($, ch)} />
+              <Button key={'ch-' + ch.uuid} label={fit(ch.text, Math.max(10, width - 9))} plain onPress={() => goTo($, ch)} />
             </Box>
           ))}
         </Box>
@@ -671,7 +678,7 @@ export const register: Register = on => {
             key={'stop-' + b.pid}
             label={armedPid === b.pid ? t('sure') : t('stop')}
             variant={armedPid === b.pid ? 'primary' : undefined}
-            onPress={() => void pressStop($, b.pid)}
+            onPress={() => pressStop($, b.pid)}
           />
         </Box>
       )
@@ -756,7 +763,7 @@ export const register: Register = on => {
           ) : (
             <Box key={'row-' + s.sessionId} flexDirection="row">
               <Text>{'  '}</Text>
-              <Button key={s.sessionId} label={label} plain onPress={() => void resume($, s)} />
+              <Button key={s.sessionId} label={label} plain onPress={() => resume($, s)} />
               <Text dimColor>{tail}</Text>
             </Box>
           ),
