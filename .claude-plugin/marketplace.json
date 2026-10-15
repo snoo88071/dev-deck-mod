@@ -1,0 +1,13 @@
+{
+  "name": "dev-deck-mod",
+  "description": "Dev Deck, inside the Claude Code CLI",
+  "owner": { "name": "Sergio Galici", "url": "https://github.com/snoo88071" },
+  "plugins": [
+    {
+      "name": "dev-deck-mod",
+      "source": "./",
+      "description": "Your Claude Code CLI sessions in a pane: what's open and what it runs, the past ones to resume, your messages as chapters, and a guard against a second dev server. Windows.",
+      "category": "development"
+    }
+  ]
+}

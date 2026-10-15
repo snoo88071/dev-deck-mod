@@ -1,8 +1,11 @@
 {
   "name": "dev-deck-mod",
   "version": "0.1.0",
-  "description": "Your Claude Code CLI sessions in a pane: what's open, what's running under it, and the past ones to resume.",
-  "author": { "name": "Sergio Galici" },
+  "description": "Your Claude Code CLI sessions in a pane: what's open and what it runs, the past ones to resume, your messages as chapters, and a guard against a second dev server. Windows.",
+  "author": { "name": "Sergio Galici", "url": "https://github.com/snoo88071" },
+  "homepage": "https://github.com/snoo88071/dev-deck-mod",
+  "repository": "https://github.com/snoo88071/dev-deck-mod",
   "license": "MIT",
+  "keywords": ["mod", "sessions", "resume", "history", "processes", "dev-servers", "ports", "windows"],
   "types": "./types/index.d.ts"
 }

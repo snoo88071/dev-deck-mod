@@ -1,2 +1,4 @@
 .claude-plugin/types/
 node_modules/
+# Working plans: the author's own notes, not part of the mod.
+.claude/plans/
