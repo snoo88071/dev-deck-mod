@@ -22,6 +22,8 @@ export type Branch = {
   ports: number[]
   /** Bytes in memory, the whole branch. */
   ram: number
+  /** When the session started it, milliseconds since the epoch; 0 when Windows didn't say. */
+  started: number
 }
 
 /** What an open session holds, from the last read of the processes. */

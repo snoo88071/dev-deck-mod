@@ -1,7 +1,8 @@
 import type { Branch } from '../../types'
 
 /** One process as Windows reports it. */
-export type Proc = { pid: number; ppid: number; name: string; ram: number; cmd: string }
+/** One process as Windows reports it; `started` in milliseconds since the epoch, 0 when unknown. */
+export type Proc = { pid: number; ppid: number; name: string; ram: number; cmd: string; started?: number }
 
 /** What `Get-CimInstance Win32_Process` printed as JSON, each row `{ i, p, n, w, c }`. */
 export function parseProcs(json: string): Proc[] {
@@ -17,7 +18,7 @@ export function parseProcs(json: string): Proc[] {
     if (typeof r !== 'object' || r === null) continue
     const o = r as Record<string, unknown>
     if (typeof o.i !== 'number' || typeof o.p !== 'number') continue
-    procs.push({ pid: o.i, ppid: o.p, name: String(o.n ?? ''), ram: Number(o.w) || 0, cmd: typeof o.c === 'string' ? o.c : '' })
+    procs.push({ pid: o.i, ppid: o.p, name: String(o.n ?? ''), ram: Number(o.w) || 0, cmd: typeof o.c === 'string' ? o.c : '', started: Number(o.s) || 0 })
   }
   return procs
 }
@@ -119,7 +120,7 @@ export function sessionLoad(pid: number, tree: Tree, ports: Map<number, number[]
     // A console host alone is Windows' own, not something the session runs.
     if (procs.every(p => p.name.toLowerCase() === 'conhost.exe')) continue
     const open = [...new Set(procs.flatMap(p => ports.get(p.pid) ?? []))].sort((a, b) => a - b)
-    branches.push({ pid: child.pid, label: labelOf(procs), ports: open, ram: branchRam })
+    branches.push({ pid: child.pid, label: labelOf(procs), ports: open, ram: branchRam, started: child.started ?? 0 })
   }
   branches.sort((a, b) => (b.ports.length > 0 ? 1 : 0) - (a.ports.length > 0 ? 1 : 0) || b.ram - a.ram)
   return { ram, branches }

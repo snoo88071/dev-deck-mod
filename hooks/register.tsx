@@ -57,6 +57,11 @@ const drawnIds = new Map<string, string>()
 let chaptersMtime = 0
 /** The band's next read, pending: a later ask moves it, so reads close together are one. */
 let ownTimer: Timer | undefined
+/** When the current answer began, and whether Claude ran a shell command in it. */
+let turnStartedAt = 0
+let ranCommand = false
+/** Set when an answer ended: the next read says which servers born since then are still up. */
+let reportFrom: number | undefined
 
 // What reaches outside the mod goes through $, and $ can't cross an import: these live here.
 
@@ -103,7 +108,8 @@ function loadScript(transcripts: [string, string][]): string {
     .join('; ')
   return [
     '[Console]::OutputEncoding=[Text.Encoding]::UTF8',
-    '$procs = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,WorkingSetSize,CommandLine | ForEach-Object { [pscustomobject]@{ i=[int]$_.ProcessId; p=[int]$_.ParentProcessId; n=$_.Name; w=[double]$_.WorkingSetSize; c=$_.CommandLine } })',
+    // s: when the process started, in milliseconds since the epoch.
+    '$procs = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,WorkingSetSize,CommandLine,CreationDate | ForEach-Object { [pscustomobject]@{ i=[int]$_.ProcessId; p=[int]$_.ParentProcessId; n=$_.Name; w=[double]$_.WorkingSetSize; c=$_.CommandLine; s=$(if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }) } })',
     '$tails = @{}',
     // The file's last 256 KB, shared with Claude Code still writing it; the last answer's line.
     `function Tail($id, $f) { try { $s=[IO.File]::Open($f,'Open','Read','ReadWrite'); try { $n=[Math]::Min(262144,$s.Length); [void]$s.Seek(-$n,'End'); $b=New-Object byte[] $n; [void]$s.Read($b,0,$n) } finally { $s.Close() }; $l=[Text.Encoding]::UTF8.GetString($b) -split "\`n"; for ($k=$l.Length-1; $k -ge 0; $k--) { if ($l[$k] -like '*"type":"assistant"*' -and $l[$k] -like '*"usage"*') { $tails[$id]=$l[$k]; break } } } catch {} }`,
@@ -326,8 +332,18 @@ async function readOwn($: EngineInterface): Promise<void> {
   if (!snap) return
   const load = sessionLoad(mine.pid, snap.tree, snap.ports)
   const own = await ownContext($)
-  const servers = load.branches.filter(b => b.ports.length > 0).map(b => ({ label: b.label, ports: b.ports }))
+  const up = load.branches.filter(b => b.ports.length > 0)
+  const servers = up.map(b => ({ label: b.label, ports: b.ports }))
   await update($, band, () => ({ servers, ram: load.ram, ...(own ? { context: own.percent } : {}) }))
+  if (reportFrom !== undefined) {
+    const from = reportFrom
+    reportFrom = undefined
+    const born = up.filter(b => b.started >= from)
+    if (born.length > 0) {
+      const names = born.map(b => b.label + ' ' + b.ports.map(p => ':' + p).join(' ')).join(' · ')
+      $.ui.log(names + (born.length === 1 ? ' resta acceso' : ' restano accesi'))
+    }
+  }
 }
 
 /** Reads this session's messages again, when its transcript changed since the last read. */
@@ -452,12 +468,21 @@ export const register: Register = on => {
   // After a shell command the processes may have changed: the band reads again shortly.
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const ran = await next(e)
+    ranCommand = true
     scheduleOwnRead($)
     return ran
   }).catch(($, e, next) => next(e))
 
-  // And at the end of each answer, for what changed some other way.
+  on('turn.start', async ($, e, next) => {
+    turnStartedAt = await $.clock.now()
+    ranCommand = false
+    return next(e)
+  })
+
+  // At the end of each answer, for what changed some other way; after one that ran commands,
+  // the read also says which servers it left on.
   on('turn.complete', async ($, e, next) => {
+    if (ranCommand && turnStartedAt > 0) reportFrom = turnStartedAt
     scheduleOwnRead($)
     return next(e)
   })
